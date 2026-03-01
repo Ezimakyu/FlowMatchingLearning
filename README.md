@@ -2,6 +2,8 @@
 
 Creator: Stephen Zhu
 
+See devpost describing inspiration of project and what project does
+
 ## Quick setup and run
 
 This project uses:
