@@ -32,6 +32,17 @@ class JobStatus(str, Enum):
     FAILED = "FAILED"
 
 
+class UploadInputItem(StrictAPIModel):
+    source_file_id: str = Field(min_length=1)
+    source_filename: str = Field(min_length=1)
+    source_sha256: str = Field(min_length=64, max_length=64)
+    source_file_path: str = Field(min_length=1)
+    media_id: str | None = None
+    media_filename: str | None = None
+    media_sha256: str | None = None
+    media_file_path: str | None = None
+
+
 class UploadRecord(StrictAPIModel):
     upload_id: str = Field(min_length=1)
     doc_id: str = Field(min_length=1)
@@ -43,6 +54,7 @@ class UploadRecord(StrictAPIModel):
     media_filename: str | None = None
     media_sha256: str | None = None
     media_file_path: str | None = None
+    input_items: list[UploadInputItem] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utc_now)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -61,6 +73,7 @@ class JobRecord(StrictAPIModel):
     job_id: str = Field(min_length=1)
     deterministic_key: str = Field(min_length=1)
     upload_id: str = Field(min_length=1)
+    upload_ids: list[str] = Field(default_factory=list)
     doc_id: str = Field(min_length=1)
     model_profile: Literal["test", "demo"] = "test"
     stage: JobStage = JobStage.INGESTING
@@ -91,6 +104,13 @@ class StartJobRequest(StrictAPIModel):
     force_restart: bool = False
 
 
+class StartCombinedJobRequest(StrictAPIModel):
+    upload_ids: list[str] = Field(min_length=1)
+    doc_id: str = Field(min_length=1)
+    model_profile: Literal["test", "demo"] = "test"
+    force_restart: bool = False
+
+
 class JobStatusResponse(StrictAPIModel):
     job: JobRecord
     events: list[JobEvent] = Field(default_factory=list)
@@ -116,7 +136,9 @@ __all__ = [
     "JobStage",
     "JobStatus",
     "JobStatusResponse",
+    "StartCombinedJobRequest",
     "StartJobRequest",
+    "UploadInputItem",
     "UploadRecord",
     "utc_now",
 ]

@@ -9,6 +9,7 @@ from backend.app.api.models import (
     ExportGraphRequest,
     ExportGraphResponse,
     JobStatusResponse,
+    StartCombinedJobRequest,
     StartJobRequest,
     UploadRecord,
 )
@@ -62,6 +63,18 @@ def create_app(*, orchestrator: JobOrchestrator | None = None) -> FastAPI:
     def start_job(request: StartJobRequest) -> JobStatusResponse:
         try:
             job = runtime_orchestrator.start_job(request)
+            return runtime_orchestrator.get_job_status(job_id=job.job_id, events_limit=50)
+        except JobNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except JobConflictError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/v1/jobs/start-combined", response_model=JobStatusResponse)
+    def start_combined_job(request: StartCombinedJobRequest) -> JobStatusResponse:
+        try:
+            job = runtime_orchestrator.start_combined_job(request)
             return runtime_orchestrator.get_job_status(job_id=job.job_id, events_limit=50)
         except JobNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc

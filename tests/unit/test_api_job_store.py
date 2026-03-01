@@ -26,6 +26,8 @@ def test_job_store_register_upload_is_deterministic(tmp_path: Path) -> None:
     loaded = store.load_upload(upload_id=first.upload_id)
     assert loaded.source_sha256 == first.source_sha256
     assert loaded.doc_id == "doc_calc"
+    assert len(loaded.input_items) == 1
+    assert loaded.input_items[0].source_file_id == "slides_01"
 
 
 def test_job_store_job_and_event_persistence(tmp_path: Path) -> None:
@@ -51,3 +53,35 @@ def test_job_store_job_and_event_persistence(tmp_path: Path) -> None:
     events = store.list_events(job_id=job.job_id)
     assert len(events) == 1
     assert events[0].event_type == "stage_start"
+    store.clear_events(job_id=job.job_id)
+    assert store.list_events(job_id=job.job_id) == []
+
+
+def test_job_store_combined_job_is_deterministic(tmp_path: Path) -> None:
+    store = JobStore(root_dir=tmp_path / "runtime")
+    first_upload = store.register_upload(
+        doc_id="doc_calc",
+        source_file_id="slides_01",
+        source_filename="slides_01.pdf",
+        source_bytes=b"%PDF fake content A",
+    )
+    second_upload = store.register_upload(
+        doc_id="doc_calc",
+        source_file_id="slides_02",
+        source_filename="slides_02.pdf",
+        source_bytes=b"%PDF fake content B",
+    )
+    combined_one = store.get_or_create_combined_job(
+        upload_ids=[first_upload.upload_id, second_upload.upload_id],
+        doc_id="doc_calc_combined",
+        model_profile="test",
+    )
+    combined_two = store.get_or_create_combined_job(
+        upload_ids=[second_upload.upload_id, first_upload.upload_id],
+        doc_id="doc_calc_combined",
+        model_profile="test",
+    )
+    assert combined_one.job_id == combined_two.job_id
+    assert sorted(combined_one.upload_ids) == sorted(
+        [first_upload.upload_id, second_upload.upload_id]
+    )

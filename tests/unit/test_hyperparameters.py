@@ -11,6 +11,9 @@ def test_load_hyperparameters_from_defaults_when_file_missing(tmp_path: Path) ->
     assert hyperparams.phase_b.toc_generation.model_test == "gpt-4.1-mini"
     assert hyperparams.phase_b.iteration_loop.top_k_historical_matches == 12
     assert hyperparams.phase_b.iteration_loop.similarity_fallback_threshold == 0.62
+    assert hyperparams.phase_b.iteration_loop.max_llm_concepts_per_section == 6
+    assert hyperparams.phase_b.iteration_loop.seed_core_nodes_from_toc is True
+    assert hyperparams.phase_b.iteration_loop.freeze_node_set_after_seed is True
 
 
 def test_load_hyperparameters_ignores_comment_fields(tmp_path: Path) -> None:
@@ -39,8 +42,13 @@ def test_load_hyperparameters_ignores_comment_fields(tmp_path: Path) -> None:
                 "edge_acceptance_confidence_threshold": 0.7,
                 "retrieval_overfetch_multiplier": 5,
                 "max_section_chars_per_call": 25000,
+                "max_sections_to_parse": 18,
+                "max_llm_concepts_per_section": 4,
                 "max_state_nodes_in_context": 150,
                 "max_historical_nodes_for_local_similarity": 300,
+                "seed_core_nodes_from_toc": True,
+                "max_seed_core_nodes": 8,
+                "freeze_node_set_after_seed": True,
             },
         },
     }
@@ -54,3 +62,30 @@ def test_load_hyperparameters_ignores_comment_fields(tmp_path: Path) -> None:
     assert hyperparams.phase_b.iteration_loop.top_k_historical_matches == 9
     assert hyperparams.phase_b.iteration_loop.similarity_fallback_threshold == 0.58
     assert hyperparams.phase_b.iteration_loop.retrieval_overfetch_multiplier == 5
+    assert hyperparams.phase_b.iteration_loop.max_sections_to_parse == 18
+    assert hyperparams.phase_b.iteration_loop.max_llm_concepts_per_section == 4
+    assert hyperparams.phase_b.iteration_loop.max_seed_core_nodes == 8
+
+
+def test_load_hyperparameters_ignores_unknown_fields_for_compatibility(tmp_path: Path) -> None:
+    payload = {
+        "phase_b": {
+            "toc_generation": {
+                "max_input_chars": 110000,
+            },
+            "iteration_loop": {
+                "top_k_historical_matches": 7,
+                "similarity_threshold": 0.75,
+                "future_experimental_knob": 123,
+            },
+            "future_phase_b_toggle": True,
+        },
+        "future_root_value": "ignored",
+    }
+    config_path = tmp_path / "hyperparameters_unknown.json"
+    config_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    hyperparams = load_hyperparameters(config_path)
+    assert hyperparams.phase_b.toc_generation.max_input_chars == 110000
+    assert hyperparams.phase_b.iteration_loop.top_k_historical_matches == 7
+    assert hyperparams.phase_b.iteration_loop.similarity_threshold == 0.75

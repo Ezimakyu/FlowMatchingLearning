@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
+from typing import Any, get_args, get_origin
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 
 class StrictConfigModel(BaseModel):
@@ -32,8 +34,13 @@ class IterationLoopHyperparameters(StrictConfigModel):
     edge_acceptance_confidence_threshold: float = Field(default=0.60, ge=0.0, le=1.0)
     retrieval_overfetch_multiplier: int = Field(default=4, ge=1, le=10)
     max_section_chars_per_call: int = Field(default=30000, ge=1000)
+    max_sections_to_parse: int = Field(default=0, ge=0)
+    max_llm_concepts_per_section: int = Field(default=6, ge=1, le=20)
     max_state_nodes_in_context: int = Field(default=200, ge=10)
     max_historical_nodes_for_local_similarity: int = Field(default=400, ge=50)
+    seed_core_nodes_from_toc: bool = True
+    max_seed_core_nodes: int = Field(default=12, ge=1, le=50)
+    freeze_node_set_after_seed: bool = True
 
     @model_validator(mode="after")
     def validate_thresholds(self) -> "IterationLoopHyperparameters":
@@ -71,14 +78,57 @@ def _strip_comment_fields(value):
     return value
 
 
+def _extract_nested_model(annotation: Any) -> type[BaseModel] | None:
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        return annotation
+    origin = get_origin(annotation)
+    if origin is None:
+        return None
+    for arg in get_args(annotation):
+        nested = _extract_nested_model(arg)
+        if nested is not None:
+            return nested
+    return None
+
+
+def _strip_unknown_fields_for_model(model_cls: type[BaseModel], value: Any) -> Any:
+    if not isinstance(value, dict):
+        return value
+    cleaned: dict[str, Any] = {}
+    for key, item in value.items():
+        field = model_cls.model_fields.get(key)
+        if field is None:
+            continue
+        nested_model = _extract_nested_model(field.annotation)
+        if nested_model is None:
+            cleaned[key] = item
+            continue
+        cleaned[key] = _strip_unknown_fields_for_model(nested_model, item)
+    return cleaned
+
+
 def load_hyperparameters(path: str | Path) -> Hyperparameters:
+    logger = logging.getLogger(__name__)
     target = Path(path)
     if not target.exists():
         return Hyperparameters()
 
     raw_payload = json.loads(target.read_text(encoding="utf-8"))
     normalized = _strip_comment_fields(raw_payload)
-    return Hyperparameters.model_validate(normalized)
+    try:
+        return Hyperparameters.model_validate(normalized)
+    except ValidationError as exc:
+        if not exc.errors() or any(err.get("type") != "extra_forbidden" for err in exc.errors()):
+            raise
+        # Compatibility fallback: ignore unknown fields rather than failing hard.
+        filtered = _strip_unknown_fields_for_model(Hyperparameters, normalized)
+        dropped_count = len(exc.errors())
+        logger.warning(
+            "hyperparameters.ignored_unknown_fields path=%s dropped=%d",
+            target,
+            dropped_count,
+        )
+        return Hyperparameters.model_validate(filtered)
 
 
 __all__ = [

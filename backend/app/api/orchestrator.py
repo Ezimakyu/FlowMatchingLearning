@@ -15,6 +15,7 @@ from backend.app.api.models import (
     JobStage,
     JobStatus,
     JobStatusResponse,
+    StartCombinedJobRequest,
     StartJobRequest,
     UploadRecord,
     utc_now,
@@ -274,6 +275,60 @@ class JobOrchestrator:
         self._run_job_worker(job.job_id)
         return self.store.load_job(job_id=job.job_id)
 
+    def start_combined_job(self, request: StartCombinedJobRequest) -> JobRecord:
+        normalized_upload_ids = sorted({item.strip() for item in request.upload_ids if item.strip()})
+        if not normalized_upload_ids:
+            raise ValueError("upload_ids must include at least one upload id.")
+        # Ensure all upload ids exist before creating or starting combined job.
+        for upload_id in normalized_upload_ids:
+            self._load_upload_or_raise(upload_id)
+
+        job = self.store.get_or_create_combined_job(
+            upload_ids=normalized_upload_ids,
+            doc_id=request.doc_id,
+            model_profile=request.model_profile,
+        )
+        if request.force_restart and job.status == JobStatus.RUNNING and self._is_thread_active(job.job_id):
+            raise JobConflictError(
+                f"Job '{job.job_id}' is currently running and cannot be restarted."
+            )
+        if request.force_restart:
+            job = self._reset_for_restart(job)
+
+        if job.status == JobStatus.RUNNING and self._is_thread_active(job.job_id):
+            return job
+
+        if job.status == JobStatus.COMPLETED and job.stage in {
+            JobStage.GRAPH_FINALIZED,
+            JobStage.EXPORTED,
+        }:
+            return job
+
+        started_at = job.started_at or utc_now()
+        job = self.store.save_job(
+            job.model_copy(
+                update={
+                    "status": JobStatus.RUNNING,
+                    "error": None,
+                    "started_at": started_at,
+                }
+            )
+        )
+        self._emit_event(
+            job_id=job.job_id,
+            event_type="job_started",
+            message="Combined job started.",
+            stage=job.stage,
+            payload={"upload_count": len(job.upload_ids or [job.upload_id])},
+        )
+
+        if self.config.run_jobs_async:
+            self._start_background_worker(job.job_id)
+            return self.store.load_job(job_id=job.job_id)
+
+        self._run_job_worker(job.job_id)
+        return self.store.load_job(job_id=job.job_id)
+
     def get_job_status(self, *, job_id: str, events_limit: int = 100) -> JobStatusResponse:
         job = self._load_job_or_raise(job_id)
         events = self.store.list_events(job_id=job_id, limit=events_limit)
@@ -353,7 +408,8 @@ class JobOrchestrator:
         stage: JobStage | None = None
         try:
             job = self._load_job_or_raise(job_id)
-            upload = self._load_upload_or_raise(job.upload_id)
+            upload_ids = job.upload_ids if job.upload_ids else [job.upload_id]
+            uploads = [self._load_upload_or_raise(upload_id) for upload_id in upload_ids]
 
             job = self.store.save_job(
                 job.model_copy(
@@ -365,7 +421,7 @@ class JobOrchestrator:
                 )
             )
             stage = JobStage.INGESTING
-            phase_a = self._ensure_phase_a_artifact(job=job, upload=upload)
+            phase_a = self._ensure_phase_a_artifact(job=job, uploads=uploads)
             stage = JobStage.TOC
             toc = self._ensure_toc_artifact(job=job, phase_a=phase_a)
             stage = JobStage.SECTION_PARSING
@@ -420,7 +476,7 @@ class JobOrchestrator:
         self,
         *,
         job: JobRecord,
-        upload: UploadRecord,
+        uploads: list[UploadRecord],
     ) -> PhaseAIngestionResult:
         artifact_path = Path(job.artifacts.phase_a_json)
         if artifact_path.exists():
@@ -451,8 +507,9 @@ class JobOrchestrator:
             event_type="stage_start",
             stage=JobStage.INGESTING,
             message="INGESTING stage started.",
+            payload={"input_count": len(uploads)},
         )
-        phase_a = self._run_ingesting_stage(job=job, upload=upload)
+        phase_a = self._run_ingesting_stage(job=job, uploads=uploads)
         self.store.write_json_artifact(
             path=job.artifacts.phase_a_json,
             payload=phase_a.model_dump(mode="json"),
@@ -465,6 +522,7 @@ class JobOrchestrator:
             payload={
                 "stored_chunk_count": phase_a.stored_chunk_count,
                 "stored_embedding_count": phase_a.stored_embedding_count,
+                "input_count": len(uploads),
             },
         )
         return phase_a
@@ -597,18 +655,43 @@ class JobOrchestrator:
         )
         return graph_output
 
-    def _run_ingesting_stage(self, *, job: JobRecord, upload: UploadRecord) -> PhaseAIngestionResult:
+    def _run_ingesting_stage(self, *, job: JobRecord, uploads: list[UploadRecord]) -> PhaseAIngestionResult:
         hyperparams = load_hyperparameters(self.config.hyperparams_json)
-        source_bytes = Path(upload.source_file_path).read_bytes()
-        media_bytes = (
-            Path(upload.media_file_path).read_bytes() if upload.media_file_path is not None else None
-        )
-        input_payload = PhaseAIngestionInput(
-            source_file_id=upload.source_file_id,
-            source_file_bytes=source_bytes,
-            media_id=upload.media_id,
-            media_bytes=media_bytes,
-        )
+        if not uploads:
+            raise ValueError("Combined ingestion requires at least one upload.")
+        ingestion_inputs: list[PhaseAIngestionInput] = []
+        for upload in uploads:
+            items = upload.input_items
+            if not items:
+                source_file_id = upload.source_file_id
+                source_file_path = upload.source_file_path
+                media_id = upload.media_id
+                media_file_path = upload.media_file_path
+                source_bytes = Path(source_file_path).read_bytes()
+                media_bytes = Path(media_file_path).read_bytes() if media_file_path else None
+                ingestion_inputs.append(
+                    PhaseAIngestionInput(
+                        source_file_id=source_file_id,
+                        source_file_bytes=source_bytes,
+                        media_id=media_id,
+                        media_bytes=media_bytes,
+                    )
+                )
+                continue
+
+            for item in items:
+                source_bytes = Path(item.source_file_path).read_bytes()
+                media_bytes = (
+                    Path(item.media_file_path).read_bytes() if item.media_file_path else None
+                )
+                ingestion_inputs.append(
+                    PhaseAIngestionInput(
+                        source_file_id=item.source_file_id,
+                        source_file_bytes=source_bytes,
+                        media_id=item.media_id,
+                        media_bytes=media_bytes,
+                    )
+                )
         storage_client = RetryingActianStore(
             delegate=ActianCortexStore(config=ActianCortexConfig.from_env()),
             policy=self.config.db_retry_policy,
@@ -624,7 +707,7 @@ class JobOrchestrator:
             ingestion_provider="modal",
             storage_provider="actian",
         )
-        return pipeline.run_batch(doc_id=job.doc_id, inputs=[input_payload])
+        return pipeline.run_batch(doc_id=job.doc_id, inputs=ingestion_inputs)
 
     def _run_toc_stage(self, *, job: JobRecord, phase_a: PhaseAIngestionResult) -> TOCGenerationOutput:
         hyperparams = load_hyperparameters(self.config.hyperparams_json)
@@ -707,8 +790,13 @@ class JobOrchestrator:
                 edge_acceptance_confidence_threshold=loop_hp.edge_acceptance_confidence_threshold,
                 retrieval_overfetch_multiplier=loop_hp.retrieval_overfetch_multiplier,
                 max_section_chars_per_call=loop_hp.max_section_chars_per_call,
+                max_sections_to_parse=loop_hp.max_sections_to_parse,
+                max_llm_concepts_per_section=loop_hp.max_llm_concepts_per_section,
                 max_state_nodes_in_context=loop_hp.max_state_nodes_in_context,
                 max_historical_nodes_for_local_similarity=loop_hp.max_historical_nodes_for_local_similarity,
+                seed_core_nodes_from_toc=loop_hp.seed_core_nodes_from_toc,
+                max_seed_core_nodes=loop_hp.max_seed_core_nodes,
+                freeze_node_set_after_seed=loop_hp.freeze_node_set_after_seed,
             ),
             reasoning_provider="openai",
             storage_provider="actian",
@@ -734,6 +822,7 @@ class JobOrchestrator:
         )
 
     def _reset_for_restart(self, job: JobRecord) -> JobRecord:
+        self.store.clear_events(job_id=job.job_id)
         for path in [
             job.artifacts.phase_a_json,
             job.artifacts.toc_json,

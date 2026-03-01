@@ -103,6 +103,57 @@ class FakeSectionReasoningClient:
         )
 
 
+class FakeSpecificConceptReasoningClient(FakeSectionReasoningClient):
+    def extract_section_concepts(
+        self,
+        *,
+        doc_id: str,
+        section_id: str,
+        section_title: str,
+        section_text: str,
+        rolling_state_json: str,
+    ) -> SectionConceptExtractionOutput:
+        _ = section_title
+        _ = section_text
+        _ = rolling_state_json
+        if section_id == "limits_section":
+            concepts = [
+                SectionConcept(
+                    concept_id="epsilon_delta",
+                    label="Epsilon Delta Formalism",
+                    summary="Formal limit definitions and notation details.",
+                    aliases=["eps-delta argument"],
+                    source_chunk_ids=[f"{doc_id}:vision_text:00000"],
+                    confidence=0.74,
+                )
+            ]
+        else:
+            concepts = [
+                SectionConcept(
+                    concept_id="notation_tricks",
+                    label="Derivative Notation Tricks",
+                    summary="Surface notation choices for derivative expressions.",
+                    aliases=["symbol shortcuts"],
+                    source_chunk_ids=[f"{doc_id}:vision_text:00001"],
+                    confidence=0.7,
+                )
+            ]
+        return SectionConceptExtractionOutput(
+            concepts=concepts,
+            warnings=[],
+            llm_call=LLMCallMetadata(
+                provider="openai",
+                prompt_name="section_concept_extraction",
+                prompt_version="2026-02-28.v2",
+                model="gpt-4.1-mini",
+                request_id=f"req_extract_specific_{section_id}",
+            ),
+            prompt_tag="section_concept_extraction:2026-02-28.v2",
+            prompt_checksum="checksum_extract_specific",
+            raw_response_text='{"concepts":[]}',
+        )
+
+
 class FakeActianSimilarityClient:
     def similarity_search(
         self,
@@ -270,3 +321,28 @@ def test_phase_b_graph_pipeline_uses_local_similarity_fallback() -> None:
         second_section.concepts[0].historical_matches[0].historical_concept_id
         == result.graph.edges[0].source
     )
+
+
+def test_phase_b_graph_pipeline_freezes_node_set_after_toc_seed() -> None:
+    pipeline = PhaseBGraphPipeline(
+        reasoning_client=FakeSpecificConceptReasoningClient(),
+        storage_client=FakeNoActianSimilarityClient(),
+    )
+    embeddings = EmbeddingBatchResult(
+        doc_id="doc_calc",
+        model_name="BAAI/bge-m3",
+        embeddings=_sample_embeddings(),
+    )
+    result = pipeline.run(
+        doc_id="doc_calc",
+        toc=_sample_toc(),
+        chunking=_sample_chunking(),
+        embeddings=embeddings,
+        job_id="job_graph_test_freeze",
+    )
+    assert len(result.graph.nodes) == 2
+    seeded_ids = {node.id for node in result.graph.nodes}
+    assert seeded_ids
+    for section_result in result.section_results:
+        for concept in section_result.concepts:
+            assert concept.concept_id in seeded_ids

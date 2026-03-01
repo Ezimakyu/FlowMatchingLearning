@@ -11,6 +11,7 @@ from backend.app.api.models import (
     JobRecord,
     JobStage,
     JobStatus,
+    UploadInputItem,
     UploadRecord,
     utc_now,
 )
@@ -109,6 +110,18 @@ class JobStore:
             media_filename=(media_filename.strip() if media_filename else None),
             media_sha256=media_sha256,
             media_file_path=str(media_path) if media_bytes is not None else None,
+            input_items=[
+                UploadInputItem(
+                    source_file_id=normalized_source_file_id,
+                    source_filename=source_filename.strip() or "source.bin",
+                    source_sha256=source_sha256,
+                    source_file_path=str(source_path),
+                    media_id=media_id.strip() if media_id else None,
+                    media_filename=(media_filename.strip() if media_filename else None),
+                    media_sha256=media_sha256,
+                    media_file_path=str(media_path) if media_bytes is not None else None,
+                )
+            ],
             metadata={
                 "source_bytes": len(source_bytes),
                 "media_bytes": len(media_bytes) if media_bytes is not None else 0,
@@ -132,31 +145,60 @@ class JobStore:
             raise ValueError("model_profile must be either 'test' or 'demo'.")
         deterministic_key = f"{upload.upload_id}:{upload.doc_id}:{model_profile}"
         job_id = _deterministic_job_id(deterministic_key=deterministic_key)
-        job_dir = self.jobs_dir / job_id
-        artifacts_dir = job_dir / "artifacts"
-        job_path = job_dir / "job.json"
+        job_path, artifacts = self._resolve_job_paths(job_id=job_id)
 
         if job_path.exists():
             return JobRecord.model_validate(self._read_json(job_path))
 
-        artifacts_dir.mkdir(parents=True, exist_ok=True)
-        artifacts = JobArtifactPaths(
-            phase_a_json=str(artifacts_dir / "phase_a_result.json"),
-            toc_json=str(artifacts_dir / "toc.json"),
-            toc_meta_json=str(artifacts_dir / "toc_meta.json"),
-            graph_json=str(artifacts_dir / "graph_data.json"),
-            rolling_state_json=str(artifacts_dir / "rolling_state.json"),
-            section_results_json=str(artifacts_dir / "section_parse_results.json"),
-        )
         job = JobRecord(
             job_id=job_id,
             deterministic_key=deterministic_key,
             upload_id=upload.upload_id,
+            upload_ids=[upload.upload_id],
             doc_id=upload.doc_id,
             model_profile=model_profile,
             stage=JobStage.INGESTING,
             status=JobStatus.PENDING,
             artifacts=artifacts,
+        )
+        self.save_job(job)
+        return job
+
+    def get_or_create_combined_job(
+        self,
+        *,
+        upload_ids: list[str],
+        doc_id: str,
+        model_profile: str,
+    ) -> JobRecord:
+        if model_profile not in {"test", "demo"}:
+            raise ValueError("model_profile must be either 'test' or 'demo'.")
+        normalized_doc_id = doc_id.strip()
+        if not normalized_doc_id:
+            raise ValueError("doc_id must be non-empty.")
+        normalized_upload_ids = sorted({item.strip() for item in upload_ids if item.strip()})
+        if not normalized_upload_ids:
+            raise ValueError("upload_ids must contain at least one upload id.")
+
+        deterministic_key = (
+            f"combined:{normalized_doc_id}:{model_profile}:{','.join(normalized_upload_ids)}"
+        )
+        job_id = _deterministic_job_id(deterministic_key=deterministic_key)
+        job_path, artifacts = self._resolve_job_paths(job_id=job_id)
+        if job_path.exists():
+            return JobRecord.model_validate(self._read_json(job_path))
+
+        job = JobRecord(
+            job_id=job_id,
+            deterministic_key=deterministic_key,
+            upload_id=normalized_upload_ids[0],
+            upload_ids=normalized_upload_ids,
+            doc_id=normalized_doc_id,
+            model_profile=model_profile,
+            stage=JobStage.INGESTING,
+            status=JobStatus.PENDING,
+            artifacts=artifacts,
+            metadata={"combined_upload_count": len(normalized_upload_ids)},
         )
         self.save_job(job)
         return job
@@ -191,6 +233,12 @@ class JobStore:
             lines = lines[-limit:]
         return [JobEvent.model_validate(json.loads(line)) for line in lines]
 
+    def clear_events(self, *, job_id: str) -> None:
+        path = self.jobs_dir / job_id / "events.jsonl"
+        with self._lock:
+            if path.exists():
+                path.unlink()
+
     def write_json_artifact(self, *, path: str, payload: dict | list) -> None:
         self._atomic_write_json(Path(path), payload)
 
@@ -206,4 +254,20 @@ class JobStore:
         if not path.exists():
             raise FileNotFoundError(path)
         return json.loads(path.read_text(encoding="utf-8"))
+
+    def _resolve_job_paths(self, *, job_id: str) -> tuple[Path, JobArtifactPaths]:
+        job_dir = self.jobs_dir / job_id
+        artifacts_dir = job_dir / "artifacts"
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        return (
+            job_dir / "job.json",
+            JobArtifactPaths(
+                phase_a_json=str(artifacts_dir / "phase_a_result.json"),
+                toc_json=str(artifacts_dir / "toc.json"),
+                toc_meta_json=str(artifacts_dir / "toc_meta.json"),
+                graph_json=str(artifacts_dir / "graph_data.json"),
+                rolling_state_json=str(artifacts_dir / "rolling_state.json"),
+                section_results_json=str(artifacts_dir / "section_parse_results.json"),
+            ),
+        )
 

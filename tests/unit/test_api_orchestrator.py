@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from backend.app.api.models import JobStage, JobStatus, StartJobRequest
+from backend.app.api.models import JobStage, JobStatus, StartCombinedJobRequest, StartJobRequest
 from backend.app.api.orchestrator import JobOrchestrator, OrchestratorConfig
 from backend.app.api.store import JobStore
 from backend.app.models import (
@@ -162,7 +162,7 @@ def test_orchestrator_runs_state_machine_and_export(tmp_path: Path, monkeypatch)
     monkeypatch.setattr(
         orchestrator,
         "_run_ingesting_stage",
-        lambda *, job, upload: _sample_phase_a(job.doc_id),
+        lambda *, job, uploads: _sample_phase_a(job.doc_id),
     )
     monkeypatch.setattr(
         orchestrator,
@@ -215,7 +215,7 @@ def test_orchestrator_start_is_idempotent_for_completed_job(
     monkeypatch.setattr(
         orchestrator,
         "_run_ingesting_stage",
-        lambda *, job, upload: _sample_phase_a(job.doc_id),
+        lambda *, job, uploads: _sample_phase_a(job.doc_id),
     )
     monkeypatch.setattr(
         orchestrator,
@@ -232,3 +232,55 @@ def test_orchestrator_start_is_idempotent_for_completed_job(
     second = orchestrator.start_job(StartJobRequest(upload_id=upload.upload_id, model_profile="test"))
     assert first.job_id == second.job_id
     assert second.status == JobStatus.COMPLETED
+
+
+def test_orchestrator_start_combined_job_runs_single_graph(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime_dir = tmp_path / "runtime"
+    orchestrator = JobOrchestrator(
+        config=OrchestratorConfig(
+            storage_dir=str(runtime_dir),
+            hyperparams_json="backend/config/hyperparameters.json",
+            run_jobs_async=False,
+        ),
+        store=JobStore(root_dir=runtime_dir),
+    )
+    first = orchestrator.register_upload(
+        doc_id="doc_a",
+        source_file_id="slides_01",
+        source_filename="slides_01.pdf",
+        source_bytes=b"%PDF fake A",
+    )
+    second = orchestrator.register_upload(
+        doc_id="doc_b",
+        source_file_id="slides_02",
+        source_filename="slides_02.pdf",
+        source_bytes=b"%PDF fake B",
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_run_ingesting_stage",
+        lambda *, job, uploads: _sample_phase_a(job.doc_id),
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_run_toc_stage",
+        lambda *, job, phase_a: _sample_toc_output(job.doc_id),
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "_run_section_parsing_stage",
+        lambda *, job, phase_a, toc: _sample_graph_output(job.doc_id, job.job_id),
+    )
+
+    combined_job = orchestrator.start_combined_job(
+        StartCombinedJobRequest(
+            upload_ids=[first.upload_id, second.upload_id],
+            doc_id="combined_doc",
+            model_profile="test",
+        )
+    )
+    assert combined_job.status == JobStatus.COMPLETED
+    assert combined_job.stage == JobStage.GRAPH_FINALIZED
+    assert sorted(combined_job.upload_ids) == sorted([first.upload_id, second.upload_id])

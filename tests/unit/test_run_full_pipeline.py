@@ -42,13 +42,15 @@ class FakeSectionReasoningClient:
 
 
 class FakePhaseAPipeline:
+    last_inputs = None
+
     def __init__(self, *, ingestion_client, storage_client, config) -> None:
         self.ingestion_client = ingestion_client
         self.storage_client = storage_client
         self.config = config
 
     def run_batch(self, *, doc_id: str, inputs) -> PhaseAIngestionResult:
-        _ = inputs
+        FakePhaseAPipeline.last_inputs = inputs
         chunking = ChunkingResult(
             doc_id=doc_id,
             chunks=[
@@ -212,6 +214,9 @@ def test_run_full_pipeline_main_writes_all_artifacts(monkeypatch, tmp_path: Path
             source_file_id=["slides_01"],
             media_file=[],
             media_id=[],
+            input_dir=None,
+            inputs_json=None,
+            recursive=False,
             output_dir=str(output_dir),
             output_phase_a_json=None,
             output_toc_json=None,
@@ -219,6 +224,7 @@ def test_run_full_pipeline_main_writes_all_artifacts(monkeypatch, tmp_path: Path
             output_graph_json=None,
             output_rolling_state_json=None,
             output_section_results_json=None,
+            output_input_manifest_json=None,
             actian_addr=None,
             model=None,
             model_profile="test",
@@ -254,3 +260,207 @@ def test_run_full_pipeline_main_writes_all_artifacts(monkeypatch, tmp_path: Path
     assert graph_payload["graph_id"] == "graph_doc_full"
     assert rolling_payload["job_id"] == "job_full"
     assert section_payload[0]["section_id"] == "intro"
+
+
+def test_run_full_pipeline_input_dir_mode_discovers_files(
+    monkeypatch, tmp_path: Path
+) -> None:
+    source_dir = tmp_path / "inputs"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    first_pdf = source_dir / "lecture_01.pdf"
+    second_pdf = source_dir / "lecture_02.pdf"
+    media_file = source_dir / "lecture_01.mp4"
+    first_pdf.write_bytes(b"%PDF fake 1")
+    second_pdf.write_bytes(b"%PDF fake 2")
+    media_file.write_bytes(b"fake-media")
+
+    hp_json = tmp_path / "hyperparameters.json"
+    hp_json.write_text(
+        json.dumps(
+            {
+                "phase_a": {
+                    "max_vision_chunk_tokens": 260,
+                    "max_transcript_chunk_tokens": 220,
+                    "include_transcript_chunks": True,
+                },
+                "phase_b": {
+                    "toc_generation": {
+                        "max_input_chars": 10000,
+                        "model_test": "gpt-4.1-mini",
+                        "model_demo": "gpt-5.1",
+                        "prompt_version": "2026-02-28.v2",
+                        "temperature": 0.0,
+                        "max_output_tokens": 4000,
+                    },
+                    "iteration_loop": {
+                        "top_k_historical_matches": 12,
+                        "similarity_threshold": 0.72,
+                        "similarity_fallback_threshold": 0.62,
+                        "edge_acceptance_confidence_threshold": 0.6,
+                        "retrieval_overfetch_multiplier": 4,
+                        "max_section_chars_per_call": 30000,
+                        "max_state_nodes_in_context": 200,
+                        "max_historical_nodes_for_local_similarity": 400,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output_dir = tmp_path / "full_outputs"
+    monkeypatch.setattr(run_full_pipeline, "ModalRemoteIngestionClient", FakeIngestionClient)
+    monkeypatch.setattr(run_full_pipeline, "ActianCortexStore", FakeStorageClient)
+    monkeypatch.setattr(run_full_pipeline, "OpenAITOCReasoningClient", FakeTOCReasoningClient)
+    monkeypatch.setattr(
+        run_full_pipeline, "OpenAISectionReasoningClient", FakeSectionReasoningClient
+    )
+    monkeypatch.setattr(run_full_pipeline, "PhaseAIngestionPipeline", FakePhaseAPipeline)
+    monkeypatch.setattr(run_full_pipeline, "PhaseBTOCPipeline", FakeTOCPipeline)
+    monkeypatch.setattr(run_full_pipeline, "PhaseBGraphPipeline", FakeGraphPipeline)
+    monkeypatch.setattr(
+        run_full_pipeline,
+        "parse_args",
+        lambda: Namespace(
+            doc_id="doc_full_dir",
+            source_file=[],
+            source_file_id=[],
+            media_file=[],
+            media_id=[],
+            input_dir=str(source_dir),
+            inputs_json=None,
+            recursive=False,
+            output_dir=str(output_dir),
+            output_phase_a_json=None,
+            output_toc_json=None,
+            output_toc_meta_json=None,
+            output_graph_json=None,
+            output_rolling_state_json=None,
+            output_section_results_json=None,
+            output_input_manifest_json=None,
+            actian_addr=None,
+            model=None,
+            model_profile="test",
+            toc_prompt_version=None,
+            section_prompt_version=None,
+            edge_prompt_version=None,
+            job_id="job_full_dir",
+            hyperparams_json=str(hp_json),
+            env_file=".env",
+            no_env_file=True,
+        ),
+    )
+
+    run_full_pipeline.main()
+
+    manifest_path = output_dir / "input_manifest.json"
+    assert manifest_path.exists()
+    manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest_payload["input_mode"] == "input_dir"
+    assert len(manifest_payload["items"]) == 2
+    assert FakePhaseAPipeline.last_inputs is not None
+    assert len(FakePhaseAPipeline.last_inputs) == 2
+
+
+def test_run_full_pipeline_inputs_json_mode_uses_manifest_items(
+    monkeypatch, tmp_path: Path
+) -> None:
+    source_a = tmp_path / "a.pdf"
+    source_b = tmp_path / "b.pdf"
+    source_a.write_bytes(b"%PDF fake A")
+    source_b.write_bytes(b"%PDF fake B")
+    inputs_json = tmp_path / "inputs.json"
+    inputs_json.write_text(
+        json.dumps(
+            {
+                "items": [
+                    {"source_file": str(source_a), "source_file_id": "slides_a"},
+                    {"source_file": str(source_b)},
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    hp_json = tmp_path / "hyperparameters.json"
+    hp_json.write_text(
+        json.dumps(
+            {
+                "phase_a": {
+                    "max_vision_chunk_tokens": 260,
+                    "max_transcript_chunk_tokens": 220,
+                    "include_transcript_chunks": True,
+                },
+                "phase_b": {
+                    "toc_generation": {
+                        "max_input_chars": 10000,
+                        "model_test": "gpt-4.1-mini",
+                        "model_demo": "gpt-5.1",
+                        "prompt_version": "2026-02-28.v2",
+                        "temperature": 0.0,
+                        "max_output_tokens": 4000,
+                    },
+                    "iteration_loop": {
+                        "top_k_historical_matches": 12,
+                        "similarity_threshold": 0.72,
+                        "similarity_fallback_threshold": 0.62,
+                        "edge_acceptance_confidence_threshold": 0.6,
+                        "retrieval_overfetch_multiplier": 4,
+                        "max_section_chars_per_call": 30000,
+                        "max_state_nodes_in_context": 200,
+                        "max_historical_nodes_for_local_similarity": 400,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    output_dir = tmp_path / "full_outputs"
+    monkeypatch.setattr(run_full_pipeline, "ModalRemoteIngestionClient", FakeIngestionClient)
+    monkeypatch.setattr(run_full_pipeline, "ActianCortexStore", FakeStorageClient)
+    monkeypatch.setattr(run_full_pipeline, "OpenAITOCReasoningClient", FakeTOCReasoningClient)
+    monkeypatch.setattr(
+        run_full_pipeline, "OpenAISectionReasoningClient", FakeSectionReasoningClient
+    )
+    monkeypatch.setattr(run_full_pipeline, "PhaseAIngestionPipeline", FakePhaseAPipeline)
+    monkeypatch.setattr(run_full_pipeline, "PhaseBTOCPipeline", FakeTOCPipeline)
+    monkeypatch.setattr(run_full_pipeline, "PhaseBGraphPipeline", FakeGraphPipeline)
+    monkeypatch.setattr(
+        run_full_pipeline,
+        "parse_args",
+        lambda: Namespace(
+            doc_id="doc_inputs_json",
+            source_file=[],
+            source_file_id=[],
+            media_file=[],
+            media_id=[],
+            input_dir=None,
+            inputs_json=str(inputs_json),
+            recursive=False,
+            output_dir=str(output_dir),
+            output_phase_a_json=None,
+            output_toc_json=None,
+            output_toc_meta_json=None,
+            output_graph_json=None,
+            output_rolling_state_json=None,
+            output_section_results_json=None,
+            output_input_manifest_json=None,
+            actian_addr=None,
+            model=None,
+            model_profile="test",
+            toc_prompt_version=None,
+            section_prompt_version=None,
+            edge_prompt_version=None,
+            job_id="job_inputs_json",
+            hyperparams_json=str(hp_json),
+            env_file=".env",
+            no_env_file=True,
+        ),
+    )
+
+    run_full_pipeline.main()
+    manifest_path = output_dir / "input_manifest.json"
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert payload["input_mode"] == "inputs_json"
+    assert len(payload["items"]) == 2

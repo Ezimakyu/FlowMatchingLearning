@@ -7,6 +7,13 @@ python backend/tools/run_full_pipeline.py \
   --source-file-id sample_lecture \
   --output-dir artifacts/full_run \
   --model-profile test
+
+(directory mode: auto-discover source/media files)
+python backend/tools/run_full_pipeline.py \
+  --doc-id sample \
+  --input-dir sample_data/course_pack \
+  --output-dir artifacts/full_run \
+  --model-profile test
 """
 from __future__ import annotations
 
@@ -15,6 +22,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 
 from backend.app.config import load_env_file, load_hyperparameters
 from backend.app.ingestion import ModalRemoteIngestionClient
@@ -36,20 +44,45 @@ from backend.app.reasoning import (
 from backend.app.storage import ActianCortexConfig, ActianCortexStore
 from backend.tools.run_phase_a import build_ingestion_inputs
 
+SOURCE_FILE_EXTENSIONS = {".pdf", ".ppt", ".pptx"}
+MEDIA_FILE_EXTENSIONS = {".mp4", ".mp3", ".wav", ".m4a", ".mov", ".webm", ".mkv"}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run full pipeline: Phase A -> TOC -> Graph.")
     parser.add_argument("--doc-id", required=True, help="Stable document identifier.")
     parser.add_argument(
+        "--input-dir",
+        default=None,
+        help=(
+            "Optional directory mode. Auto-discovers source files "
+            f"({', '.join(sorted(SOURCE_FILE_EXTENSIONS))}) and media files "
+            f"({', '.join(sorted(MEDIA_FILE_EXTENSIONS))})."
+        ),
+    )
+    parser.add_argument(
+        "--inputs-json",
+        default=None,
+        help=(
+            "Optional JSON path describing input file list. "
+            "Supported shapes: list[items] or {\"items\": [...]}."
+        ),
+    )
+    parser.add_argument(
+        "--recursive",
+        action="store_true",
+        help="When using --input-dir, include nested files recursively.",
+    )
+    parser.add_argument(
         "--source-file",
         action="append",
-        required=True,
+        default=[],
         help="Path to PDF/slide file. Repeat for multi-file runs.",
     )
     parser.add_argument(
         "--source-file-id",
         action="append",
-        required=True,
+        default=[],
         help="External source file identifier. Repeat in the same order as --source-file.",
     )
     parser.add_argument(
@@ -103,6 +136,11 @@ def parse_args() -> argparse.Namespace:
         "--output-section-results-json",
         default=None,
         help="Optional path override for section parse results artifact.",
+    )
+    parser.add_argument(
+        "--output-input-manifest-json",
+        default=None,
+        help="Optional path override for resolved input manifest artifact.",
     )
     parser.add_argument(
         "--actian-addr",
@@ -161,6 +199,9 @@ def parse_args() -> argparse.Namespace:
 def _resolve_output_paths(args: argparse.Namespace) -> dict[str, Path]:
     output_dir = Path(args.output_dir)
     return {
+        "input_manifest": Path(args.output_input_manifest_json)
+        if args.output_input_manifest_json
+        else output_dir / "input_manifest.json",
         "phase_a": Path(args.output_phase_a_json)
         if args.output_phase_a_json
         else output_dir / "phase_a_result.json",
@@ -185,6 +226,187 @@ def _write_json(path: Path, payload: dict | list) -> None:
     path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
+def _safe_identifier(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._:-]+", "_", value).strip("_").lower()
+    return cleaned or "file"
+
+
+def _parse_inputs_json(path: Path) -> list[dict[str, str | None]]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(payload, list):
+        items = payload
+    elif isinstance(payload, dict) and isinstance(payload.get("items"), list):
+        items = payload["items"]
+    else:
+        raise ValueError("inputs-json must be list[...] or {\"items\": [...]} payload.")
+
+    normalized: list[dict[str, str | None]] = []
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise ValueError(f"inputs-json item at index {index} must be an object.")
+        source_file = str(item.get("source_file", "")).strip()
+        if not source_file:
+            raise ValueError(f"inputs-json item at index {index} missing source_file.")
+        source_path = Path(source_file)
+        if not source_path.exists():
+            raise FileNotFoundError(source_path)
+        source_file_id = str(item.get("source_file_id", "")).strip() or _safe_identifier(
+            source_path.stem
+        )
+
+        media_file_raw = item.get("media_file")
+        media_id_raw = item.get("media_id")
+        media_file = str(media_file_raw).strip() if media_file_raw is not None else None
+        media_id = str(media_id_raw).strip() if media_id_raw is not None else None
+        if media_file and not Path(media_file).exists():
+            raise FileNotFoundError(media_file)
+        if media_file and not media_id:
+            media_id = _safe_identifier(Path(media_file).stem)
+        normalized.append(
+            {
+                "source_file": str(source_path),
+                "source_file_id": source_file_id,
+                "media_file": media_file,
+                "media_id": media_id,
+            }
+        )
+    return normalized
+
+
+def _discover_inputs_in_directory(
+    *,
+    input_dir: Path,
+    recursive: bool,
+) -> list[dict[str, str | None]]:
+    if not input_dir.exists() or not input_dir.is_dir():
+        raise ValueError(f"input-dir does not exist or is not a directory: {input_dir}")
+
+    iterator = input_dir.rglob("*") if recursive else input_dir.glob("*")
+    source_files: list[Path] = []
+    media_by_key: dict[tuple[str, str], Path] = {}
+    media_by_stem: dict[str, Path] = {}
+
+    for candidate in iterator:
+        if not candidate.is_file():
+            continue
+        suffix = candidate.suffix.lower()
+        if suffix in SOURCE_FILE_EXTENSIONS:
+            source_files.append(candidate)
+            continue
+        if suffix not in MEDIA_FILE_EXTENSIONS:
+            continue
+        parent_key = str(candidate.parent.resolve())
+        stem_key = candidate.stem.lower()
+        media_by_key[(parent_key, stem_key)] = candidate
+        media_by_stem.setdefault(stem_key, candidate)
+
+    if not source_files:
+        raise ValueError(
+            f"No source files found in {input_dir} with extensions {sorted(SOURCE_FILE_EXTENSIONS)}."
+        )
+
+    source_files.sort(key=lambda item: str(item.relative_to(input_dir)))
+    used_source_ids: dict[str, int] = {}
+    discovered: list[dict[str, str | None]] = []
+
+    for source_file in source_files:
+        relative_no_suffix = source_file.relative_to(input_dir).with_suffix("")
+        raw_source_id = _safe_identifier(str(relative_no_suffix).replace(os.sep, "_"))
+        suffix_count = used_source_ids.get(raw_source_id, 0)
+        used_source_ids[raw_source_id] = suffix_count + 1
+        source_file_id = (
+            raw_source_id if suffix_count == 0 else f"{raw_source_id}_{suffix_count + 1}"
+        )
+        source_parent_key = str(source_file.parent.resolve())
+        source_stem_key = source_file.stem.lower()
+        media_file = media_by_key.get((source_parent_key, source_stem_key)) or media_by_stem.get(
+            source_stem_key
+        )
+        discovered.append(
+            {
+                "source_file": str(source_file),
+                "source_file_id": source_file_id,
+                "media_file": str(media_file) if media_file else None,
+                "media_id": _safe_identifier(media_file.stem) if media_file else None,
+            }
+        )
+    return discovered
+
+
+def _resolve_input_rows(args: argparse.Namespace) -> list[dict[str, str | None]]:
+    has_input_dir = bool(args.input_dir)
+    has_inputs_json = bool(args.inputs_json)
+    has_explicit_sources = bool(args.source_file)
+    selected_modes = sum([has_input_dir, has_inputs_json, has_explicit_sources])
+    if selected_modes == 0:
+        raise ValueError(
+            "Provide one input mode: explicit --source-file, --input-dir, or --inputs-json."
+        )
+    if selected_modes > 1:
+        raise ValueError(
+            "Input modes are mutually exclusive. Use only one of --source-file, --input-dir, or --inputs-json."
+        )
+
+    if has_input_dir:
+        return _discover_inputs_in_directory(
+            input_dir=Path(args.input_dir),
+            recursive=bool(args.recursive),
+        )
+
+    if has_inputs_json:
+        return _parse_inputs_json(Path(args.inputs_json))
+
+    source_files = [str(item).strip() for item in args.source_file if str(item).strip()]
+    source_ids = [str(item).strip() for item in args.source_file_id if str(item).strip()]
+    if source_ids and len(source_files) != len(source_ids):
+        raise ValueError(
+            "When --source-file-id is provided, it must match --source-file count."
+        )
+    if not source_ids:
+        source_ids = [_safe_identifier(Path(path).stem) for path in source_files]
+
+    media_files = [str(item).strip() for item in args.media_file if str(item).strip()]
+    media_ids = [str(item).strip() for item in args.media_id if str(item).strip()]
+    if media_files and len(media_files) != len(source_files):
+        raise ValueError(
+            "When media is enabled, provide one --media-file per --source-file."
+        )
+    if media_ids and len(media_ids) != len(media_files):
+        raise ValueError("When --media-id is provided, it must match --media-file count.")
+    if media_files and not media_ids:
+        media_ids = [_safe_identifier(Path(path).stem) for path in media_files]
+
+    rows: list[dict[str, str | None]] = []
+    for index, source_file in enumerate(source_files):
+        source_path = Path(source_file)
+        if not source_path.exists():
+            raise FileNotFoundError(source_path)
+        media_file = media_files[index] if media_files else None
+        media_id = media_ids[index] if media_ids else None
+        if media_file and not Path(media_file).exists():
+            raise FileNotFoundError(media_file)
+        rows.append(
+            {
+                "source_file": source_file,
+                "source_file_id": source_ids[index],
+                "media_file": media_file,
+                "media_id": media_id,
+            }
+        )
+    return rows
+
+
+def _build_phase_a_input_namespace(rows: list[dict[str, str | None]]) -> argparse.Namespace:
+    media_files = [item["media_file"] for item in rows]
+    media_ids = [item["media_id"] for item in rows]
+    return argparse.Namespace(
+        source_file=[item["source_file"] for item in rows],
+        source_file_id=[item["source_file_id"] for item in rows],
+        media_file=media_files if any(media_files) else [],
+        media_id=media_ids if any(media_files) else [],
+    )
+
+
 def main() -> None:
     configure_logging()
     logger = logging.getLogger(__name__)
@@ -195,7 +417,9 @@ def main() -> None:
         logger.info("full_pipeline.env_loaded keys=%d path=%s", len(loaded), args.env_file)
 
     output_paths = _resolve_output_paths(args)
-    inputs = build_ingestion_inputs(args)
+    input_rows = _resolve_input_rows(args)
+    phase_a_args = _build_phase_a_input_namespace(input_rows)
+    inputs = build_ingestion_inputs(phase_a_args)
     hyperparams = load_hyperparameters(args.hyperparams_json)
     toc_hp = hyperparams.phase_b.toc_generation
     loop_hp = hyperparams.phase_b.iteration_loop
@@ -233,6 +457,19 @@ def main() -> None:
         model,
         args.model_profile,
     )
+    _write_json(
+        output_paths["input_manifest"],
+        {
+            "doc_id": args.doc_id,
+            "input_mode": (
+                "input_dir"
+                if args.input_dir
+                else ("inputs_json" if args.inputs_json else "explicit")
+            ),
+            "items": input_rows,
+        },
+    )
+    logger.info("full_pipeline.input_manifest_written path=%s", output_paths["input_manifest"])
 
     # Phase A
     logger.info("full_pipeline.phase_a_start doc_id=%s", args.doc_id)
@@ -300,8 +537,13 @@ def main() -> None:
             edge_acceptance_confidence_threshold=loop_hp.edge_acceptance_confidence_threshold,
             retrieval_overfetch_multiplier=loop_hp.retrieval_overfetch_multiplier,
             max_section_chars_per_call=loop_hp.max_section_chars_per_call,
+            max_sections_to_parse=loop_hp.max_sections_to_parse,
+            max_llm_concepts_per_section=loop_hp.max_llm_concepts_per_section,
             max_state_nodes_in_context=loop_hp.max_state_nodes_in_context,
             max_historical_nodes_for_local_similarity=loop_hp.max_historical_nodes_for_local_similarity,
+            seed_core_nodes_from_toc=loop_hp.seed_core_nodes_from_toc,
+            max_seed_core_nodes=loop_hp.max_seed_core_nodes,
+            freeze_node_set_after_seed=loop_hp.freeze_node_set_after_seed,
         ),
         reasoning_provider="openai",
         storage_provider="actian",

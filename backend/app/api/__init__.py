@@ -7,7 +7,9 @@ from .models import (
     JobStage,
     JobStatus,
     JobStatusResponse,
+    StartCombinedJobRequest,
     StartJobRequest,
+    UploadInputItem,
     UploadRecord,
 )
 from .orchestrator import JobConflictError, JobNotFoundError, JobOrchestrator, OrchestratorConfig
@@ -33,7 +35,9 @@ __all__ = [
     "JobStatusResponse",
     "JobStore",
     "OrchestratorConfig",
+    "StartCombinedJobRequest",
     "StartJobRequest",
+    "UploadInputItem",
     "UploadRecord",
     "app",
     "create_app",

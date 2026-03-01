@@ -53,8 +53,13 @@ class PhaseBGraphConfig:
     edge_acceptance_confidence_threshold: float = 0.60
     retrieval_overfetch_multiplier: int = 4
     max_section_chars_per_call: int = 30_000
+    max_sections_to_parse: int = 0
+    max_llm_concepts_per_section: int = 6
     max_state_nodes_in_context: int = 200
     max_historical_nodes_for_local_similarity: int = 400
+    seed_core_nodes_from_toc: bool = True
+    max_seed_core_nodes: int = 12
+    freeze_node_set_after_seed: bool = True
 
 
 @dataclass(frozen=True)
@@ -219,6 +224,15 @@ class PhaseBGraphPipeline:
         flat_sections = flatten_toc_sections(toc.sections)
         if not flat_sections:
             raise ValueError("TOC contains no sections; cannot build graph.")
+        original_section_count = len(flat_sections)
+        if self.config.max_sections_to_parse > 0 and len(flat_sections) > self.config.max_sections_to_parse:
+            flat_sections = flat_sections[: self.config.max_sections_to_parse]
+            logger.info(
+                "phase_b_graph.section_limit_applied doc_id=%s selected_sections=%d total_sections=%d",
+                doc_id,
+                len(flat_sections),
+                original_section_count,
+            )
         resolved_job_id = job_id or f"job_{doc_id}_{uuid.uuid4().hex[:8]}"
 
         rolling_state = RollingState(
@@ -229,7 +243,8 @@ class PhaseBGraphPipeline:
                 for index, section in enumerate(flat_sections)
             ],
             metadata={
-                "toc_section_count": len(flat_sections),
+                "toc_section_count": original_section_count,
+                "toc_section_count_active": len(flat_sections),
                 "reasoning_provider": self.reasoning_provider,
                 "storage_provider": self.storage_provider,
             },
@@ -237,13 +252,31 @@ class PhaseBGraphPipeline:
         section_results: list[SectionParseResult] = []
         chunk_by_id = {chunk.chunk_id: chunk for chunk in chunking.chunks}
         embedding_by_chunk = {item.chunk_id: item for item in embeddings.embeddings}
+        seeded_node_count = 0
+        if self.config.seed_core_nodes_from_toc:
+            seeded_node_count = self._seed_core_nodes_from_toc(
+                state=rolling_state,
+                flat_sections=flat_sections,
+                chunk_by_id=chunk_by_id,
+            )
+            if seeded_node_count:
+                logger.info(
+                    "phase_b_graph.seeded_core_nodes doc_id=%s seeded_nodes=%d",
+                    doc_id,
+                    seeded_node_count,
+                )
 
         logger.info(
-            "phase_b_graph.pipeline_start doc_id=%s job_id=%s sections=%d chunks=%d",
+            (
+                "phase_b_graph.pipeline_start doc_id=%s job_id=%s sections=%d chunks=%d "
+                "seeded_nodes=%d freeze_node_set=%s"
+            ),
             doc_id,
             resolved_job_id,
             len(flat_sections),
             len(chunking.chunks),
+            seeded_node_count,
+            self.config.freeze_node_set_after_seed,
         )
         for index, section in enumerate(flat_sections):
             self._mark_section_in_progress(state=rolling_state, index=index)
@@ -322,6 +355,8 @@ class PhaseBGraphPipeline:
         errors: list[str] = []
         llm_calls: list[Any] = []
         concepts: list[SectionConcept] = []
+        concepts_by_id: dict[str, SectionConcept] = {}
+        concept_order: list[str] = []
         edge_candidates: list[SectionEdgeCandidate] = []
         edge_validation_attempts = 0
         accepted_edge_count = 0
@@ -347,7 +382,9 @@ class PhaseBGraphPipeline:
         if not section_text:
             section_text = "[NO_SECTION_TEXT_AVAILABLE]"
 
-        historical_node_ids = [node.id for node in state.nodes]
+        historical_node_ids = [
+            node.id for node in state.nodes if not bool(node.metadata.get("toc_seed"))
+        ]
         historical_node_id_set = set(historical_node_ids)
         historical_chunk_index = self._build_chunk_to_concept_index(
             nodes=state.nodes,
@@ -359,6 +396,7 @@ class PhaseBGraphPipeline:
             node_by_id=node_by_id,
             embedding_by_chunk=embedding_by_chunk,
         )
+        allow_node_creation = not self.config.freeze_node_set_after_seed or not state.nodes
 
         try:
             extraction = self._extract_concepts_for_section(
@@ -368,8 +406,23 @@ class PhaseBGraphPipeline:
             )
             llm_calls.append(extraction.llm_call)
             warnings.extend(extraction.warnings)
+            concept_cap = max(1, self.config.max_llm_concepts_per_section)
+            extracted_concepts = extraction.concepts[:concept_cap]
+            if len(extraction.concepts) > concept_cap:
+                warnings.append(
+                    (
+                        "Trimmed extracted concepts from "
+                        f"{len(extraction.concepts)} to {concept_cap} to keep core-topic focus."
+                    )
+                )
+                logger.info(
+                    "phase_b_graph.section_concept_cap section_id=%s extracted=%d capped_to=%d",
+                    section.section_id,
+                    len(extraction.concepts),
+                    concept_cap,
+                )
 
-            for extracted_concept in extraction.concepts:
+            for extracted_concept in extracted_concepts:
                 concept = self._normalize_section_concept(
                     concept=extracted_concept,
                     fallback_chunk_ids=resolved_chunk_ids,
@@ -381,6 +434,7 @@ class PhaseBGraphPipeline:
                     concept=concept,
                     section=section,
                     chunk_by_id=chunk_by_id,
+                    allow_node_creation=allow_node_creation,
                 )
                 concept = SectionConcept(
                     concept_id=canonical_id,
@@ -392,6 +446,12 @@ class PhaseBGraphPipeline:
                     confidence=concept.confidence,
                     historical_matches=[],
                 )
+                if canonical_id in concepts_by_id:
+                    concepts_by_id[canonical_id] = self._merge_section_concepts(
+                        existing=concepts_by_id[canonical_id],
+                        incoming=concept,
+                    )
+                    continue
                 concept_matches = self._retrieve_historical_matches(
                     concept=concept,
                     historical_chunk_index=historical_chunk_index,
@@ -401,7 +461,8 @@ class PhaseBGraphPipeline:
                     historical_concept_vectors=historical_concept_vectors,
                 )
                 concept.historical_matches = concept_matches
-                concepts.append(concept)
+                concepts_by_id[canonical_id] = concept
+                concept_order.append(canonical_id)
 
                 for match in concept_matches:
                     historical_node = node_by_id.get(match.historical_concept_id)
@@ -460,6 +521,7 @@ class PhaseBGraphPipeline:
                         elif reason.startswith("Edge skipped due to DAG constraint"):
                             rejected_cycle_count += 1
 
+            concepts = [concepts_by_id[concept_id] for concept_id in concept_order]
             status = "partial" if warnings else "ok"
             self._mark_section_complete(state=state, index=section_index)
             concepts_with_matches = sum(1 for item in concepts if item.historical_matches)
@@ -645,6 +707,31 @@ class PhaseBGraphPipeline:
             historical_matches=[],
         )
 
+    def _merge_section_concepts(
+        self, *, existing: SectionConcept, incoming: SectionConcept
+    ) -> SectionConcept:
+        merged_aliases = _dedupe_preserve_order(existing.aliases + incoming.aliases)
+        merged_chunk_ids = _dedupe_preserve_order(
+            existing.source_chunk_ids + incoming.source_chunk_ids
+        )
+        merged_historical = list(existing.historical_matches)
+        known_historical_ids = {match.historical_concept_id for match in merged_historical}
+        for match in incoming.historical_matches:
+            if match.historical_concept_id in known_historical_ids:
+                continue
+            merged_historical.append(match)
+            known_historical_ids.add(match.historical_concept_id)
+        return SectionConcept(
+            concept_id=existing.concept_id,
+            label=existing.label,
+            summary=incoming.summary if len(incoming.summary) > len(existing.summary) else existing.summary,
+            aliases=merged_aliases,
+            source_chunk_ids=merged_chunk_ids,
+            evidence_text=existing.evidence_text or incoming.evidence_text,
+            confidence=max(existing.confidence, incoming.confidence),
+            historical_matches=merged_historical,
+        )
+
     def _resolve_or_create_node(
         self,
         *,
@@ -653,6 +740,7 @@ class PhaseBGraphPipeline:
         concept: SectionConcept,
         section: FlatTOCSection,
         chunk_by_id: dict[str, Any],
+        allow_node_creation: bool,
     ) -> str:
         alias_keys = self._build_alias_keys(label=concept.label, aliases=concept.aliases)
         existing_id = next(
@@ -664,45 +752,35 @@ class PhaseBGraphPipeline:
             None,
         )
         if existing_id and existing_id in node_by_id:
-            existing_node = node_by_id[existing_id]
-            merged_aliases = _dedupe_preserve_order(existing_node.aliases + concept.aliases)
-            merged_chunk_ids = _dedupe_preserve_order(
-                existing_node.source_material.chunk_ids + concept.source_chunk_ids
+            self._merge_node_with_concept(
+                state=state,
+                node_by_id=node_by_id,
+                target_node_id=existing_id,
+                concept=concept,
+                alias_keys=alias_keys,
+                chunk_by_id=chunk_by_id,
+                section_id=section.section_id,
             )
-            merged_pages = _dedupe_preserve_order(
-                [str(page) for page in existing_node.source_material.page_numbers]
-                + [
-                    str(chunk_by_id[cid].source_page)
-                    for cid in concept.source_chunk_ids
-                    if cid in chunk_by_id and chunk_by_id[cid].source_page is not None
-                ]
+            return existing_id
+
+        if not allow_node_creation and node_by_id:
+            fallback_node_id = self._select_fallback_node_id(
+                state=state,
+                node_by_id=node_by_id,
+                section=section,
+                concept=concept,
             )
-            merged_timestamps = _dedupe_preserve_order(
-                existing_node.source_material.transcript_timestamps
-                + self._chunk_timestamps(concept.source_chunk_ids, chunk_by_id)
-            )
-            updated_node = ConceptNode(
-                id=existing_node.id,
-                label=existing_node.label,
-                summary=existing_node.summary,
-                aliases=merged_aliases,
-                confidence=max(existing_node.confidence, concept.confidence),
-                deep_dive=existing_node.deep_dive,
-                source_material=SourceMaterial(
-                    doc_id=existing_node.source_material.doc_id,
-                    section_id=existing_node.source_material.section_id,
-                    chunk_ids=merged_chunk_ids,
-                    page_numbers=[int(page) for page in merged_pages],
-                    transcript_timestamps=merged_timestamps,
-                    snippet=existing_node.source_material.snippet or concept.evidence_text,
-                ),
-                metadata=existing_node.metadata,
-            )
-            self._replace_node_in_state(state=state, node_id=existing_node.id, node=updated_node)
-            node_by_id[existing_node.id] = updated_node
-            for alias_key in alias_keys:
-                state.concept_alias_index[alias_key] = existing_node.id
-            return existing_node.id
+            if fallback_node_id:
+                self._merge_node_with_concept(
+                    state=state,
+                    node_by_id=node_by_id,
+                    target_node_id=fallback_node_id,
+                    concept=concept,
+                    alias_keys=alias_keys,
+                    chunk_by_id=chunk_by_id,
+                    section_id=section.section_id,
+                )
+                return fallback_node_id
 
         node_id = self._generate_node_id(
             doc_id=state.doc_id,
@@ -737,6 +815,170 @@ class PhaseBGraphPipeline:
         for alias_key in alias_keys:
             state.concept_alias_index[alias_key] = node.id
         return node.id
+
+    def _merge_node_with_concept(
+        self,
+        *,
+        state: RollingState,
+        node_by_id: dict[str, ConceptNode],
+        target_node_id: str,
+        concept: SectionConcept,
+        alias_keys: list[str],
+        chunk_by_id: dict[str, Any],
+        section_id: str,
+    ) -> None:
+        existing_node = node_by_id[target_node_id]
+        merged_aliases = _dedupe_preserve_order(existing_node.aliases + concept.aliases)
+        merged_chunk_ids = _dedupe_preserve_order(
+            existing_node.source_material.chunk_ids + concept.source_chunk_ids
+        )
+        merged_pages = _dedupe_preserve_order(
+            [str(page) for page in existing_node.source_material.page_numbers]
+            + [
+                str(chunk_by_id[cid].source_page)
+                for cid in concept.source_chunk_ids
+                if cid in chunk_by_id and chunk_by_id[cid].source_page is not None
+            ]
+        )
+        merged_timestamps = _dedupe_preserve_order(
+            existing_node.source_material.transcript_timestamps
+            + self._chunk_timestamps(concept.source_chunk_ids, chunk_by_id)
+        )
+        use_incoming_summary = (
+            len(concept.summary) > len(existing_node.summary)
+            or bool(existing_node.metadata.get("toc_seed"))
+        )
+        updated_metadata = dict(existing_node.metadata)
+        updated_metadata["last_observed_section"] = section_id
+        if bool(updated_metadata.get("toc_seed")):
+            updated_metadata["toc_seed"] = False
+        updated_node = ConceptNode(
+            id=existing_node.id,
+            label=existing_node.label,
+            summary=concept.summary if use_incoming_summary else existing_node.summary,
+            aliases=merged_aliases,
+            confidence=max(existing_node.confidence, concept.confidence),
+            deep_dive=existing_node.deep_dive,
+            source_material=SourceMaterial(
+                doc_id=existing_node.source_material.doc_id,
+                section_id=existing_node.source_material.section_id,
+                chunk_ids=merged_chunk_ids,
+                page_numbers=[int(page) for page in merged_pages],
+                transcript_timestamps=merged_timestamps,
+                snippet=existing_node.source_material.snippet or concept.evidence_text,
+            ),
+            metadata=updated_metadata,
+        )
+        self._replace_node_in_state(state=state, node_id=existing_node.id, node=updated_node)
+        node_by_id[existing_node.id] = updated_node
+        for alias_key in alias_keys:
+            state.concept_alias_index[alias_key] = existing_node.id
+
+    def _select_fallback_node_id(
+        self,
+        *,
+        state: RollingState,
+        node_by_id: dict[str, ConceptNode],
+        section: FlatTOCSection,
+        concept: SectionConcept,
+    ) -> str | None:
+        top_section_id = self._top_level_section_id(section.path)
+        anchored_candidates = [
+            node.id
+            for node in state.nodes
+            if node.metadata.get("seed_section_id") == top_section_id
+        ]
+        if len(anchored_candidates) == 1:
+            return anchored_candidates[0]
+        if len(anchored_candidates) > 1:
+            concept_tokens = set(_safe_slug(concept.label, max_len=128).split("_"))
+            best_id: str | None = None
+            best_score = -1
+            for node_id in anchored_candidates:
+                node = node_by_id.get(node_id)
+                if node is None:
+                    continue
+                node_tokens = set(_safe_slug(node.label, max_len=128).split("_"))
+                score = len(concept_tokens & node_tokens)
+                if score > best_score:
+                    best_score = score
+                    best_id = node_id
+            if best_id:
+                return best_id
+            return anchored_candidates[0]
+        if state.nodes:
+            return state.nodes[0].id
+        return None
+
+    def _top_level_section_id(self, path: str) -> str:
+        cleaned = path.strip()
+        if not cleaned:
+            return ""
+        return cleaned.split("/", 1)[0]
+
+    def _seed_core_nodes_from_toc(
+        self,
+        *,
+        state: RollingState,
+        flat_sections: list[FlatTOCSection],
+        chunk_by_id: dict[str, Any],
+    ) -> int:
+        top_level_sections: list[FlatTOCSection] = [
+            section for section in flat_sections if "/" not in section.path
+        ]
+        if not top_level_sections:
+            top_level_sections = list(flat_sections)
+        seed_limit = max(1, self.config.max_seed_core_nodes)
+        seeded = 0
+        existing_ids = {node.id for node in state.nodes}
+        for section in top_level_sections[:seed_limit]:
+            label = section.title.strip()
+            if not label:
+                continue
+            node_id = self._generate_node_id(
+                doc_id=state.doc_id,
+                section_id=section.section_id,
+                label=label,
+                existing_ids=existing_ids,
+            )
+            existing_ids.add(node_id)
+            valid_chunk_ids = [
+                chunk_id for chunk_id in section.chunk_ids if chunk_id in chunk_by_id
+            ]
+            snippet = self._build_snippet_from_chunks(
+                chunk_ids=valid_chunk_ids,
+                chunk_by_id=chunk_by_id,
+            )
+            node = ConceptNode(
+                id=node_id,
+                label=label,
+                summary=f"Core topic seeded from TOC section '{label}'.",
+                aliases=_dedupe_preserve_order([label]),
+                confidence=0.8,
+                source_material=SourceMaterial(
+                    doc_id=state.doc_id,
+                    section_id=section.section_id,
+                    chunk_ids=valid_chunk_ids,
+                    page_numbers=[
+                        chunk_by_id[cid].source_page
+                        for cid in valid_chunk_ids
+                        if chunk_by_id[cid].source_page is not None
+                    ],
+                    transcript_timestamps=self._chunk_timestamps(valid_chunk_ids, chunk_by_id),
+                    snippet=snippet,
+                ),
+                metadata={
+                    "core_concept": True,
+                    "toc_seed": True,
+                    "seed_section_id": section.section_id,
+                },
+            )
+            state.nodes.append(node)
+            alias_keys = self._build_alias_keys(label=node.label, aliases=node.aliases)
+            for alias_key in alias_keys:
+                state.concept_alias_index[alias_key] = node.id
+            seeded += 1
+        return seeded
 
     def _retrieve_historical_matches(
         self,

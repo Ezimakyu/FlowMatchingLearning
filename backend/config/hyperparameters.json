@@ -19,14 +19,21 @@
     },
     "iteration_loop": {
       "_comment": "Controls for section-by-section concept and edge discovery loop.",
-      "top_k_historical_matches": 12,
-      "similarity_threshold": 0.72,
-      "similarity_fallback_threshold": 0.62,
-      "edge_acceptance_confidence_threshold": 0.6,
+      "top_k_historical_matches": 9,
+      "similarity_threshold": 0.73,
+      "similarity_fallback_threshold": 0.64,
+      "edge_acceptance_confidence_threshold": 0.55,
       "retrieval_overfetch_multiplier": 4,
       "max_section_chars_per_call": 30000,
+      "_comment_iteration_count": "0 means parse all TOC sections; set >0 to cap section-loop iterations.",
+      "max_sections_to_parse": 4,
+      "_comment_concept_scope": "Cap per-section concept extraction and keep node inventory focused on high-level topics.",
+      "max_llm_concepts_per_section": 4,
       "max_state_nodes_in_context": 200,
-      "max_historical_nodes_for_local_similarity": 400
+      "max_historical_nodes_for_local_similarity": 400,
+      "seed_core_nodes_from_toc": false,
+      "max_seed_core_nodes": 10,
+      "freeze_node_set_after_seed": false
     }
   }
 }

@@ -68,6 +68,10 @@ class FakeOrchestrator:
         _ = request
         return self.job
 
+    def start_combined_job(self, request) -> JobRecord:
+        _ = request
+        return self.job
+
     def get_job_status(self, *, job_id: str, events_limit: int = 100) -> JobStatusResponse:
         _ = job_id
         _ = events_limit
@@ -109,6 +113,17 @@ def test_api_endpoints_basic_flow(tmp_path: Path) -> None:
     )
     assert start_response.status_code == 200
     assert start_response.json()["job"]["job_id"] == "job_fake_1"
+
+    start_combined_response = client.post(
+        "/api/v1/jobs/start-combined",
+        json={
+            "upload_ids": ["upl_fake_1"],
+            "doc_id": "doc_calc",
+            "model_profile": "test",
+        },
+    )
+    assert start_combined_response.status_code == 200
+    assert start_combined_response.json()["job"]["job_id"] == "job_fake_1"
 
     status_response = client.get("/api/v1/jobs/job_fake_1")
     assert status_response.status_code == 200
