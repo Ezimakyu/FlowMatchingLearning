@@ -1,0 +1,29 @@
+{
+  "_comment": "Central tuning knobs for pipeline behavior. Keep values conservative first, then tune incrementally.",
+  "phase_a": {
+    "_comment": "Ingestion chunking controls.",
+    "max_vision_chunk_tokens": 260,
+    "max_transcript_chunk_tokens": 220,
+    "include_transcript_chunks": true
+  },
+  "phase_b": {
+    "_comment": "Reasoning-stage controls.",
+    "toc_generation": {
+      "_comment": "TOC = Table of Contents generation settings.",
+      "max_input_chars": 120000,
+      "model_test": "gpt-4.1-mini",
+      "model_demo": "gpt-5.1",
+      "prompt_version": "2026-02-28.v2",
+      "temperature": 0.0,
+      "max_output_tokens": 4000
+    },
+    "iteration_loop": {
+      "_comment": "Planned controls for section-by-section concept and edge discovery loop.",
+      "top_k_historical_matches": 8,
+      "similarity_threshold": 0.78,
+      "edge_acceptance_confidence_threshold": 0.65,
+      "max_section_chars_per_call": 30000,
+      "max_state_nodes_in_context": 200
+    }
+  }
+}

@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import io
 from functools import lru_cache
+import logging
 
 import modal
 
 from backend.app.models import VisionExtractionResult, VisionPageExtraction
 
 app = modal.App("phase-a-vision-extraction")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 vision_image = (
     modal.Image.debian_slim(python_version="3.11")
@@ -17,7 +20,9 @@ vision_image = (
         "pillow==11.3.0",
         "transformers==4.56.2",
         "torch==2.8.0",
+        "pydantic",
     )
+    .add_local_python_source("backend")
 )
 
 
@@ -26,9 +31,11 @@ def _load_caption_pipeline(model_name: str):
     from transformers import pipeline
 
     try:
+        logger.info("vision.model_load primary_model=%s", model_name)
         return pipeline("image-to-text", model=model_name, device=0)
     except Exception:
         # Fallback that is much lighter and has broad compatibility.
+        logger.warning("vision.model_load_fallback primary_model=%s", model_name)
         return pipeline("image-to-text", model="Salesforce/blip-image-captioning-base", device=0)
 
 
@@ -55,12 +62,14 @@ def extract_document_vision(
     file_bytes: bytes,
     doc_id: str,
     source_file_id: str,
-    model_name: str = "Qwen/Qwen2-VL-2B-Instruct",
+    model_name: str = "Salesforce/blip-image-captioning-base",
 ) -> dict:
     import fitz
 
+    logger.info("vision.start doc_id=%s source_file_id=%s", doc_id, source_file_id)
     document = fitz.open(stream=file_bytes, filetype="pdf")
     pages: list[VisionPageExtraction] = []
+    logger.info("vision.page_count doc_id=%s pages=%d", doc_id, document.page_count)
 
     for page_index in range(document.page_count):
         page = document.load_page(page_index)
@@ -78,6 +87,7 @@ def extract_document_vision(
                 chunk_ids=[],
             )
         )
+        logger.info("vision.page_complete doc_id=%s page=%d", doc_id, page_index + 1)
 
     result = VisionExtractionResult(
         doc_id=doc_id,
@@ -86,6 +96,7 @@ def extract_document_vision(
         pages=pages,
         metadata={"page_count": len(pages)},
     )
+    logger.info("vision.finish doc_id=%s pages=%d", doc_id, len(pages))
     return result.model_dump(mode="json")
 
 

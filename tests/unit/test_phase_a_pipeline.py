@@ -10,7 +10,7 @@ from backend.app.models import (
     VisionExtractionResult,
     VisionPageExtraction,
 )
-from backend.app.pipelines.phase_a import PhaseAIngestionPipeline
+from backend.app.pipelines.phase_a import PhaseAIngestionInput, PhaseAIngestionPipeline
 
 
 class FakeModalIngestionClient:
@@ -18,6 +18,8 @@ class FakeModalIngestionClient:
         self.transcription_calls = 0
         self.vision_calls = 0
         self.embedding_calls = 0
+        self.source_file_ids: list[str] = []
+        self.media_ids: list[str] = []
 
     def transcribe_media(
         self,
@@ -27,6 +29,7 @@ class FakeModalIngestionClient:
         media_id: str,
     ) -> TranscriptionResult:
         self.transcription_calls += 1
+        self.media_ids.append(media_id)
         return TranscriptionResult(
             doc_id=doc_id,
             media_id=media_id,
@@ -50,6 +53,7 @@ class FakeModalIngestionClient:
         source_file_id: str,
     ) -> VisionExtractionResult:
         self.vision_calls += 1
+        self.source_file_ids.append(source_file_id)
         return VisionExtractionResult(
             doc_id=doc_id,
             source_file_id=source_file_id,
@@ -146,6 +150,8 @@ def test_phase_a_pipeline_without_media_skips_transcription() -> None:
 
     assert ingestion_client.transcription_calls == 0
     assert result.stored_chunk_count >= 1
+    assert result.metadata["source_file_id"] == "slides_02.pdf"
+    assert result.metadata["media_id"] is None
 
 
 def test_phase_a_pipeline_rejects_wrong_ingestion_provider() -> None:
@@ -162,4 +168,67 @@ def test_phase_a_pipeline_rejects_wrong_ingestion_provider() -> None:
             doc_id="calculus_101_lecture_03",
             source_file_id="slides_03.pdf",
             source_file_bytes=b"%PDF-1.7 fake",
+        )
+
+
+def test_phase_a_pipeline_run_batch_handles_multiple_inputs() -> None:
+    ingestion_client = FakeModalIngestionClient()
+    storage_client = FakeActianStorageClient()
+    pipeline = PhaseAIngestionPipeline(
+        ingestion_client=ingestion_client,
+        storage_client=storage_client,
+    )
+
+    result = pipeline.run_batch(
+        doc_id="calculus_101_batch",
+        inputs=[
+            PhaseAIngestionInput(
+                source_file_id="slides_01.pdf",
+                source_file_bytes=b"%PDF-1.7 fake 1",
+                media_id="lecture_01.mp4",
+                media_bytes=b"fake-media-1",
+            ),
+            PhaseAIngestionInput(
+                source_file_id="slides_02.pdf",
+                source_file_bytes=b"%PDF-1.7 fake 2",
+                media_id="lecture_02.mp4",
+                media_bytes=b"fake-media-2",
+            ),
+        ],
+    )
+
+    assert ingestion_client.vision_calls == 2
+    assert ingestion_client.transcription_calls == 2
+    assert ingestion_client.embedding_calls == 1
+    assert ingestion_client.source_file_ids == ["slides_01.pdf", "slides_02.pdf"]
+    assert ingestion_client.media_ids == ["lecture_01.mp4", "lecture_02.mp4"]
+    assert result.metadata["input_count"] == 2
+    assert result.metadata["source_file_ids"] == ["slides_01.pdf", "slides_02.pdf"]
+    assert result.metadata["media_ids"] == ["lecture_01.mp4", "lecture_02.mp4"]
+
+    orders = [chunk.order for chunk in result.chunking.chunks]
+    assert orders == list(range(len(result.chunking.chunks)))
+    assert result.stored_chunk_count == len(result.chunking.chunks)
+    assert result.stored_embedding_count == len(result.embeddings.embeddings)
+
+
+def test_phase_a_pipeline_run_batch_rejects_unpaired_media_payload() -> None:
+    ingestion_client = FakeModalIngestionClient()
+    storage_client = FakeActianStorageClient()
+    pipeline = PhaseAIngestionPipeline(
+        ingestion_client=ingestion_client,
+        storage_client=storage_client,
+    )
+
+    with pytest.raises(ValueError):
+        pipeline.run_batch(
+            doc_id="calculus_101_bad_input",
+            inputs=[
+                PhaseAIngestionInput(
+                    source_file_id="slides_01.pdf",
+                    source_file_bytes=b"%PDF-1.7 fake 1",
+                    media_id="lecture_01.mp4",
+                    media_bytes=None,
+                )
+            ],
         )

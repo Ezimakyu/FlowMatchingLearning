@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import tempfile
 
@@ -8,11 +9,14 @@ import modal
 from backend.app.models import TranscriptSegment, TranscriptionResult
 
 app = modal.App("phase-a-transcription")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 transcription_image = (
     modal.Image.debian_slim(python_version="3.11")
     .apt_install("ffmpeg")
-    .uv_pip_install("faster-whisper==1.1.1")
+    .uv_pip_install("faster-whisper==1.1.1", "pydantic")
+    .add_local_python_source("backend")
 )
 
 
@@ -32,6 +36,7 @@ def transcribe_media(
 ) -> dict:
     from faster_whisper import WhisperModel
 
+    logger.info("transcription.start doc_id=%s media_id=%s model=%s", doc_id, media_id, model_name)
     suffix = os.path.splitext(media_id)[1] or ".bin"
     temp_path: str | None = None
     try:
@@ -72,6 +77,7 @@ def transcribe_media(
             transcript_text=" ".join(transcript_parts).strip(),
             metadata={"segment_count": len(segments)},
         )
+        logger.info("transcription.finish doc_id=%s segments=%d", doc_id, len(segments))
         return result.model_dump(mode="json")
     finally:
         if temp_path and os.path.exists(temp_path):

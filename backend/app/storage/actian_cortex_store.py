@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -66,9 +67,12 @@ class ActianCortexStore:
 
     def ensure_schema(self) -> None:
         # Cortex collections are created lazily per model/dimension, so schema setup is a health check.
+        logger = logging.getLogger(__name__)
+        logger.info("actian.ensure_schema_start addr=%s", self.config.server_address)
         CortexClient = self._get_client_class()
         with CortexClient(self.config.server_address) as client:
             client.health_check()
+        logger.info("actian.ensure_schema_finish addr=%s", self.config.server_address)
 
     def _collection_exists(self, client, collection_name: str) -> bool:
         if hasattr(client, "collection_exists"):
@@ -134,6 +138,7 @@ class ActianCortexStore:
         chunking: ChunkingResult,
         embeddings: EmbeddingBatchResult,
     ) -> tuple[int, int]:
+        logger = logging.getLogger(__name__)
         if chunking.doc_id != embeddings.doc_id:
             raise ValueError(
                 f"doc_id mismatch: chunking={chunking.doc_id}, embeddings={embeddings.doc_id}"
@@ -158,6 +163,13 @@ class ActianCortexStore:
         collection_name = self._build_collection_name(
             model_name=embeddings.model_name,
             vector_dim=vector_dim,
+        )
+        logger.info(
+            "actian.upsert_start addr=%s collection=%s chunks=%d embeddings=%d",
+            self.config.server_address,
+            collection_name,
+            len(chunking.chunks),
+            len(embeddings.embeddings),
         )
 
         point_ids: list[int] = []
@@ -202,6 +214,11 @@ class ActianCortexStore:
             if hasattr(client, "flush"):
                 client.flush(collection_name)
 
+        logger.info(
+            "actian.upsert_finish addr=%s collection=%s",
+            self.config.server_address,
+            collection_name,
+        )
         return len(chunking.chunks), len(embeddings.embeddings)
 
     def similarity_search(
@@ -213,6 +230,7 @@ class ActianCortexStore:
         model_name: str = "BAAI/bge-m3",
         candidate_limit: int = 0,
     ) -> list[dict[str, Any]]:
+        logger = logging.getLogger(__name__)
         if not query_vector:
             raise ValueError("query_vector must not be empty.")
         if top_k < 1:
@@ -224,6 +242,13 @@ class ActianCortexStore:
         collection_name = self._build_collection_name(
             model_name=model_name,
             vector_dim=len(query_vector),
+        )
+        logger.info(
+            "actian.search_start addr=%s collection=%s top_k=%d min_similarity=%.3f",
+            self.config.server_address,
+            collection_name,
+            top_k,
+            min_similarity,
         )
         CortexClient = self._get_client_class()
         with CortexClient(self.config.server_address) as client:
@@ -256,6 +281,12 @@ class ActianCortexStore:
                     "payload": payload,
                 }
             )
+        logger.info(
+            "actian.search_finish addr=%s collection=%s results=%d",
+            self.config.server_address,
+            collection_name,
+            len(ranked),
+        )
         return ranked
 
 

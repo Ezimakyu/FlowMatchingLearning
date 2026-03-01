@@ -1,19 +1,24 @@
 from __future__ import annotations
 
 from functools import lru_cache
+import logging
 
 import modal
 
 from backend.app.models import ChunkEmbedding, EmbeddingBatchResult, RawTextChunk
 
 app = modal.App("phase-a-embedding")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 embedding_image = (
     modal.Image.debian_slim(python_version="3.11")
     .uv_pip_install(
         "sentence-transformers==5.1.0",
         "torch==2.8.0",
+        "pydantic",
     )
+    .add_local_python_source("backend")
 )
 
 
@@ -37,6 +42,7 @@ def embed_chunks(
     model_name: str = "BAAI/bge-m3",
     batch_size: int = 128,
 ) -> dict:
+    logger.info("embedding.start doc_id=%s chunks=%d model=%s", doc_id, len(chunks), model_name)
     model = _load_embedding_model(model_name)
     validated_chunks = [RawTextChunk.model_validate(chunk) for chunk in chunks]
     text_batch = [chunk.text for chunk in validated_chunks]
@@ -64,6 +70,12 @@ def embed_chunks(
         model_name=model_name,
         embeddings=embeddings,
         metadata={"chunk_count": len(validated_chunks)},
+    )
+    logger.info(
+        "embedding.finish doc_id=%s embeddings=%d vector_dim=%d",
+        doc_id,
+        len(embeddings),
+        embeddings[0].vector_dim if embeddings else 0,
     )
     return result.model_dump(mode="json")
 

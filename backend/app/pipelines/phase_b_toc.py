@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 
 from backend.app.compute_boundaries import assert_compute_boundary
 from backend.app.models import ChunkingResult
@@ -43,9 +44,15 @@ class PhaseBTOCPipeline:
         self.reasoning_provider = reasoning_provider
 
     def run(self, *, doc_id: str, chunking: ChunkingResult) -> TOCGenerationOutput:
+        logger = logging.getLogger(__name__)
         if chunking.doc_id != doc_id:
             raise ValueError(f"doc_id mismatch: run={doc_id}, chunking={chunking.doc_id}")
 
+        logger.info(
+            "phase_b_toc.pipeline_start doc_id=%s chunks=%d",
+            doc_id,
+            len(chunking.chunks),
+        )
         assert_compute_boundary("reasoning.toc_generation", self.reasoning_provider)
         document_text = build_toc_input_text(
             chunking=chunking,
@@ -53,10 +60,21 @@ class PhaseBTOCPipeline:
         )
         if not document_text:
             raise ValueError("Chunking input is empty; cannot generate TOC.")
-        return self.reasoning_client.generate_toc(
+        logger.info(
+            "phase_b_toc.input_built doc_id=%s chars=%d",
+            doc_id,
+            len(document_text),
+        )
+        output = self.reasoning_client.generate_toc(
             doc_id=doc_id,
             document_text=document_text,
         )
+        logger.info(
+            "phase_b_toc.pipeline_finish doc_id=%s top_level_sections=%d",
+            doc_id,
+            len(output.toc.sections),
+        )
+        return output
 
 
 __all__ = [

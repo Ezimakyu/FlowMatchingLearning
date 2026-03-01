@@ -2,6 +2,7 @@ from .phase_a import (
     ActianStorageClient,
     ModalIngestionClient,
     PhaseAIngestionConfig,
+    PhaseAIngestionInput,
     PhaseAIngestionPipeline,
 )
 from .phase_b_toc import (
@@ -14,6 +15,7 @@ __all__ = [
     "ActianStorageClient",
     "ModalIngestionClient",
     "PhaseAIngestionConfig",
+    "PhaseAIngestionInput",
     "PhaseAIngestionPipeline",
     "PhaseBTOCConfig",
     "PhaseBTOCPipeline",

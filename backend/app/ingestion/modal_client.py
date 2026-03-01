@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
+import time
 
 from backend.app.models import (
     EmbeddingBatchResult,
@@ -50,10 +52,18 @@ class ModalRemoteIngestionClient:
         doc_id: str,
         media_id: str,
     ) -> TranscriptionResult:
+        logger = logging.getLogger(__name__)
+        start = time.perf_counter()
+        logger.info("modal_client.transcribe_start doc_id=%s media_id=%s", doc_id, media_id)
         payload = self._transcribe_fn.remote(
             media_bytes=media_bytes,
             doc_id=doc_id,
             media_id=media_id,
+        )
+        logger.info(
+            "modal_client.transcribe_finish doc_id=%s elapsed_s=%.2f",
+            doc_id,
+            time.perf_counter() - start,
         )
         return TranscriptionResult.model_validate(payload)
 
@@ -64,10 +74,22 @@ class ModalRemoteIngestionClient:
         doc_id: str,
         source_file_id: str,
     ) -> VisionExtractionResult:
+        logger = logging.getLogger(__name__)
+        start = time.perf_counter()
+        logger.info(
+            "modal_client.vision_start doc_id=%s source_file_id=%s",
+            doc_id,
+            source_file_id,
+        )
         payload = self._vision_fn.remote(
             file_bytes=file_bytes,
             doc_id=doc_id,
             source_file_id=source_file_id,
+        )
+        logger.info(
+            "modal_client.vision_finish doc_id=%s elapsed_s=%.2f",
+            doc_id,
+            time.perf_counter() - start,
         )
         return VisionExtractionResult.model_validate(payload)
 
@@ -77,9 +99,17 @@ class ModalRemoteIngestionClient:
         doc_id: str,
         chunks: list[RawTextChunk],
     ) -> EmbeddingBatchResult:
+        logger = logging.getLogger(__name__)
+        start = time.perf_counter()
+        logger.info("modal_client.embedding_start doc_id=%s chunks=%d", doc_id, len(chunks))
         payload = self._embedding_fn.remote(
             doc_id=doc_id,
             chunks=[chunk.model_dump(mode="json") for chunk in chunks],
+        )
+        logger.info(
+            "modal_client.embedding_finish doc_id=%s elapsed_s=%.2f",
+            doc_id,
+            time.perf_counter() - start,
         )
         return EmbeddingBatchResult.model_validate(payload)
 

@@ -5,6 +5,9 @@ import os
 import sys
 from dataclasses import dataclass
 
+from backend.app.config import load_env_file
+from backend.app.logging_utils import configure_logging
+
 
 @dataclass(frozen=True)
 class CheckResult:
@@ -36,6 +39,22 @@ def check_env_key(key: str) -> CheckResult:
     if value:
         return _result(f"env_{key}", True, "set")
     return _result(f"env_{key}", False, "not set")
+
+
+def check_openai_api_key() -> CheckResult:
+    value = os.getenv("OPENAI_API_KEY", "").strip()
+    if value:
+        return _result("env_OPENAI_API_KEY", True, "set")
+
+    typo_value = os.getenv("OPEN_API_KEY", "").strip()
+    if typo_value:
+        return _result(
+            "env_OPENAI_API_KEY",
+            False,
+            "not set (found OPEN_API_KEY, did you mean OPENAI_API_KEY?)",
+        )
+
+    return _result("env_OPENAI_API_KEY", False, "not set")
 
 
 def check_actian_health(address: str) -> CheckResult:
@@ -70,6 +89,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip Actian health check.",
     )
+    parser.add_argument(
+        "--env-file",
+        default=".env",
+        help="Optional env file to load before checks (default: .env).",
+    )
+    parser.add_argument(
+        "--no-env-file",
+        action="store_true",
+        help="Disable automatic env-file loading.",
+    )
     return parser.parse_args()
 
 
@@ -84,7 +113,7 @@ def collect_checks(args: argparse.Namespace) -> list[CheckResult]:
 
     if args.phase in ("phase_b", "all"):
         checks.append(check_module_import("openai"))
-        checks.append(check_env_key("OPENAI_API_KEY"))
+        checks.append(check_openai_api_key())
 
     return checks
 
@@ -97,7 +126,10 @@ def print_results(results: list[CheckResult]) -> None:
 
 
 def main() -> None:
+    configure_logging()
     args = parse_args()
+    if not args.no_env_file:
+        load_env_file(args.env_file, override=False)
     results = collect_checks(args)
     print_results(results)
     failed = [item for item in results if not item.ok]
