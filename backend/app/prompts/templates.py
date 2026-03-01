@@ -146,6 +146,42 @@ SECTION_CONCEPT_EXTRACTION_V2 = PromptTemplate(
     output_contract="SectionParseResult",
 )
 
+SECTION_CONCEPT_EXTRACTION_V3 = PromptTemplate(
+    name="section_concept_extraction",
+    version="2026-03-01.v3",
+    description=(
+        "Extract canonical concepts from one section with rolling-state context. "
+        "Tuned for recall while preserving strict evidence grounding."
+    ),
+    system_prompt=(
+        "You are the OpenAI reasoning stage for section parsing in a prerequisite-graph pipeline. "
+        "Ingestion and embeddings are already done by separate services. "
+        "Use only the provided section text and rolling state summary. Return strict JSON only."
+    ),
+    user_prompt_template=(
+        "Document id: $doc_id\n"
+        "Section id: $section_id\n"
+        "Section title: $section_title\n"
+        "Schema version: $schema_version\n"
+        "Output contract: SectionParseResult\n"
+        "Boundary: reasoning-only (OpenAI), no ingestion tasks.\n\n"
+        "Task:\n"
+        "- Extract canonical concepts introduced or materially used in this section.\n"
+        "- Prefer stable, reusable labels (avoid overly local phrasing).\n"
+        "- Include direct evidence_text snippets when available.\n\n"
+        "Rules:\n"
+        "- Use only the provided section text plus rolling state summary.\n"
+        "- Do not hallucinate concepts outside this section text.\n"
+        "- Exclude trivial terms unless they are true instructional prerequisites.\n"
+        "- confidence must be in [0.0, 1.0].\n\n"
+        "Rolling state JSON:\n"
+        "$rolling_state_json\n\n"
+        "Section text:\n"
+        "$section_text\n"
+    ),
+    output_contract="SectionParseResult",
+)
+
 EDGE_VALIDATION_V1 = PromptTemplate(
     name="edge_validation",
     version="2026-02-28.v1",
@@ -206,14 +242,52 @@ EDGE_VALIDATION_V2 = PromptTemplate(
     output_contract="SectionEdgeCandidate",
 )
 
+EDGE_VALIDATION_V3 = PromptTemplate(
+    name="edge_validation",
+    version="2026-03-01.v3",
+    description=(
+        "Validate prerequisite dependency between a historical concept and a new concept. "
+        "Tuned to reduce false negatives while keeping evidence-based decisions."
+    ),
+    system_prompt=(
+        "You are the OpenAI reasoning engine for dependency validation in a DAG. "
+        "Direction convention is strict: source=prerequisite, target=dependent. "
+        "Be evidence-grounded, but do not be overly conservative when a dependency is clear. "
+        "Return JSON only."
+    ),
+    user_prompt_template=(
+        "Schema version: $schema_version\n"
+        "Output contract: SectionEdgeCandidate\n"
+        "Boundary: reasoning-only (OpenAI).\n\n"
+        "New concept JSON:\n"
+        "$new_concept_json\n\n"
+        "Historical concept JSON (retrieved via Actian):\n"
+        "$historical_concept_json\n\n"
+        "Supporting evidence JSON:\n"
+        "$supporting_evidence_json\n\n"
+        "Decision guidance:\n"
+        "- accepted=true when historical concept is needed to define, derive, apply, or correctly "
+        "interpret the new concept.\n"
+        "- accepted=false when concepts are merely related, parallel, or reversed in direction.\n"
+        "- source_concept_id must be the prerequisite concept id.\n"
+        "- target_concept_id must be the dependent concept id.\n"
+        "- confidence must be in [0.0, 1.0].\n"
+        "- explanation should briefly cite why the dependency does or does not hold.\n"
+        "- Do not reject solely due to moderate similarity if conceptual dependency is explicit.\n"
+    ),
+    output_contract="SectionEdgeCandidate",
+)
+
 
 PROMPTS: tuple[PromptTemplate, ...] = (
     TOC_GENERATION_V1,
     TOC_GENERATION_V2,
     SECTION_CONCEPT_EXTRACTION_V1,
     SECTION_CONCEPT_EXTRACTION_V2,
+    SECTION_CONCEPT_EXTRACTION_V3,
     EDGE_VALIDATION_V1,
     EDGE_VALIDATION_V2,
+    EDGE_VALIDATION_V3,
 )
 
 PROMPT_REGISTRY: dict[str, PromptTemplate] = {prompt.tag: prompt for prompt in PROMPTS}
@@ -248,12 +322,14 @@ def render_prompt(name: str, version: str | None = None, **kwargs: Any) -> dict[
 __all__ = [
     "EDGE_VALIDATION_V1",
     "EDGE_VALIDATION_V2",
+    "EDGE_VALIDATION_V3",
     "LATEST_PROMPTS",
     "PROMPT_REGISTRY",
     "PROMPTS",
     "PromptTemplate",
     "SECTION_CONCEPT_EXTRACTION_V1",
     "SECTION_CONCEPT_EXTRACTION_V2",
+    "SECTION_CONCEPT_EXTRACTION_V3",
     "TOC_GENERATION_V1",
     "TOC_GENERATION_V2",
     "get_prompt",

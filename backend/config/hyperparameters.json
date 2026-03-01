@@ -18,12 +18,15 @@
       "max_output_tokens": 4000
     },
     "iteration_loop": {
-      "_comment": "Planned controls for section-by-section concept and edge discovery loop.",
-      "top_k_historical_matches": 8,
-      "similarity_threshold": 0.78,
-      "edge_acceptance_confidence_threshold": 0.65,
+      "_comment": "Controls for section-by-section concept and edge discovery loop.",
+      "top_k_historical_matches": 12,
+      "similarity_threshold": 0.72,
+      "similarity_fallback_threshold": 0.62,
+      "edge_acceptance_confidence_threshold": 0.6,
+      "retrieval_overfetch_multiplier": 4,
       "max_section_chars_per_call": 30000,
-      "max_state_nodes_in_context": 200
+      "max_state_nodes_in_context": 200,
+      "max_historical_nodes_for_local_similarity": 400
     }
   }
 }

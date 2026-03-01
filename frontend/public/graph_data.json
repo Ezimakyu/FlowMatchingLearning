@@ -1,0 +1,120 @@
+{
+  "schema_version": "1.0.0",
+  "graph_id": "graph_sample_calculus",
+  "nodes": [
+    {
+      "id": "sample:limits",
+      "label": "Limits",
+      "summary": "Behavior of a function as an input approaches a value.",
+      "aliases": ["limit"],
+      "confidence": 0.96,
+      "source_material": {
+        "doc_id": "sample_calculus",
+        "section_id": "sec_limits",
+        "chunk_ids": ["sample:vision_text:00000"],
+        "page_numbers": [1],
+        "transcript_timestamps": [],
+        "snippet": "Limits are introduced before continuity and derivatives."
+      },
+      "metadata": {}
+    },
+    {
+      "id": "sample:continuity",
+      "label": "Continuity",
+      "summary": "A function is continuous when local limit behavior matches function value.",
+      "aliases": [],
+      "confidence": 0.93,
+      "source_material": {
+        "doc_id": "sample_calculus",
+        "section_id": "sec_continuity",
+        "chunk_ids": ["sample:vision_text:00001"],
+        "page_numbers": [2],
+        "transcript_timestamps": [],
+        "snippet": "Continuity depends on understanding one-sided and two-sided limits."
+      },
+      "metadata": {}
+    },
+    {
+      "id": "sample:derivatives",
+      "label": "Derivatives",
+      "summary": "Instantaneous rate of change computed from difference quotients.",
+      "aliases": ["differentiation"],
+      "confidence": 0.95,
+      "source_material": {
+        "doc_id": "sample_calculus",
+        "section_id": "sec_derivatives",
+        "chunk_ids": ["sample:vision_text:00002"],
+        "page_numbers": [3],
+        "transcript_timestamps": [],
+        "snippet": "Derivative definition uses a limiting process."
+      },
+      "metadata": {}
+    },
+    {
+      "id": "sample:optimization",
+      "label": "Optimization",
+      "summary": "Use derivative tests to locate and justify extrema.",
+      "aliases": ["maxima and minima"],
+      "confidence": 0.9,
+      "source_material": {
+        "doc_id": "sample_calculus",
+        "section_id": "sec_optimization",
+        "chunk_ids": ["sample:vision_text:00003"],
+        "page_numbers": [4],
+        "transcript_timestamps": [],
+        "snippet": "Optimization requires critical points and derivative sign analysis."
+      },
+      "metadata": {}
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge:sample:limits_to_continuity",
+      "source": "sample:limits",
+      "target": "sample:continuity",
+      "relation": "prerequisite_for",
+      "explanation": "Continuity criteria are defined in terms of limits.",
+      "confidence": 0.9,
+      "evidence": {
+        "historical_doc_id": "sample_calculus",
+        "current_doc_id": "sample_calculus",
+        "historical_chunk_ids": ["sample:vision_text:00000"],
+        "current_chunk_ids": ["sample:vision_text:00001"]
+      },
+      "metadata": {}
+    },
+    {
+      "id": "edge:sample:limits_to_derivatives",
+      "source": "sample:limits",
+      "target": "sample:derivatives",
+      "relation": "prerequisite_for",
+      "explanation": "Derivative definition uses a limit of difference quotients.",
+      "confidence": 0.93,
+      "evidence": {
+        "historical_doc_id": "sample_calculus",
+        "current_doc_id": "sample_calculus",
+        "historical_chunk_ids": ["sample:vision_text:00000"],
+        "current_chunk_ids": ["sample:vision_text:00002"]
+      },
+      "metadata": {}
+    },
+    {
+      "id": "edge:sample:derivatives_to_optimization",
+      "source": "sample:derivatives",
+      "target": "sample:optimization",
+      "relation": "prerequisite_for",
+      "explanation": "Optimization methods rely on first and second derivative tests.",
+      "confidence": 0.91,
+      "evidence": {
+        "historical_doc_id": "sample_calculus",
+        "current_doc_id": "sample_calculus",
+        "historical_chunk_ids": ["sample:vision_text:00002"],
+        "current_chunk_ids": ["sample:vision_text:00003"]
+      },
+      "metadata": {}
+    }
+  ],
+  "metadata": {
+    "note": "Replace this sample with your generated artifacts/graph_data.json if desired."
+  }
+}

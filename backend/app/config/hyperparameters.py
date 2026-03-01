@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class StrictConfigModel(BaseModel):
@@ -26,11 +26,22 @@ class TOCGenerationHyperparameters(StrictConfigModel):
 
 
 class IterationLoopHyperparameters(StrictConfigModel):
-    top_k_historical_matches: int = Field(default=8, ge=1)
-    similarity_threshold: float = Field(default=0.78, ge=0.0, le=1.0)
-    edge_acceptance_confidence_threshold: float = Field(default=0.65, ge=0.0, le=1.0)
+    top_k_historical_matches: int = Field(default=12, ge=1)
+    similarity_threshold: float = Field(default=0.72, ge=0.0, le=1.0)
+    similarity_fallback_threshold: float = Field(default=0.62, ge=0.0, le=1.0)
+    edge_acceptance_confidence_threshold: float = Field(default=0.60, ge=0.0, le=1.0)
+    retrieval_overfetch_multiplier: int = Field(default=4, ge=1, le=10)
     max_section_chars_per_call: int = Field(default=30000, ge=1000)
     max_state_nodes_in_context: int = Field(default=200, ge=10)
+    max_historical_nodes_for_local_similarity: int = Field(default=400, ge=50)
+
+    @model_validator(mode="after")
+    def validate_thresholds(self) -> "IterationLoopHyperparameters":
+        if self.similarity_fallback_threshold > self.similarity_threshold:
+            raise ValueError(
+                "similarity_fallback_threshold must be <= similarity_threshold."
+            )
+        return self
 
 
 class PhaseBHyperparameters(StrictConfigModel):

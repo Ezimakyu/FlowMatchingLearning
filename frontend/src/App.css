@@ -1,0 +1,146 @@
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: #f6f8fb;
+  color: #1f2937;
+}
+
+.toolbar {
+  border-bottom: 1px solid #d7dde8;
+  background: #ffffff;
+  padding: 0.9rem 1rem;
+}
+
+.toolbar-title h1 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.toolbar-title p {
+  margin: 0.3rem 0 0;
+  color: #607086;
+  font-size: 0.9rem;
+}
+
+.toolbar-controls {
+  margin-top: 0.85rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  align-items: center;
+}
+
+.toolbar-controls button,
+.toolbar-controls input,
+.toolbar-controls select {
+  border: 1px solid #c3ccda;
+  border-radius: 6px;
+  padding: 0.45rem 0.6rem;
+  background: #ffffff;
+  color: inherit;
+  font-size: 0.9rem;
+}
+
+.toolbar-controls button {
+  cursor: pointer;
+}
+
+.toolbar-controls label {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.9rem;
+}
+
+.job-loader {
+  display: flex;
+  gap: 0.45rem;
+}
+
+.job-loader input {
+  min-width: 16rem;
+}
+
+.toolbar-status {
+  margin-top: 0.75rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem;
+  color: #4d5d73;
+  font-size: 0.86rem;
+}
+
+.error-text {
+  color: #b42318;
+  font-weight: 600;
+}
+
+.content {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 0;
+  flex: 1;
+  min-height: 0;
+}
+
+.flow-wrapper {
+  min-height: 0;
+}
+
+.details-panel {
+  border-left: 1px solid #d7dde8;
+  background: #ffffff;
+  padding: 0.95rem;
+  overflow-y: auto;
+}
+
+.details-panel h3 {
+  margin: 0 0 0.8rem;
+}
+
+.details-row {
+  display: grid;
+  grid-template-columns: 98px 1fr;
+  gap: 0.5rem;
+  margin-bottom: 0.45rem;
+}
+
+.details-key {
+  color: #5f6f84;
+  font-weight: 600;
+}
+
+.details-value {
+  word-break: break-word;
+}
+
+.details-block {
+  margin-top: 0.75rem;
+  border-top: 1px solid #eef2f8;
+  padding-top: 0.75rem;
+}
+
+.details-block h4 {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+}
+
+.details-block p {
+  margin: 0.22rem 0;
+  color: #344256;
+  font-size: 0.88rem;
+  line-height: 1.35;
+}
+
+@media (max-width: 1080px) {
+  .content {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(55vh, 1fr) auto;
+  }
+
+  .details-panel {
+    border-left: none;
+    border-top: 1px solid #d7dde8;
+  }
+}

@@ -9,6 +9,8 @@ def test_load_hyperparameters_from_defaults_when_file_missing(tmp_path: Path) ->
     hyperparams = load_hyperparameters(missing)
     assert hyperparams.phase_a.max_vision_chunk_tokens == 260
     assert hyperparams.phase_b.toc_generation.model_test == "gpt-4.1-mini"
+    assert hyperparams.phase_b.iteration_loop.top_k_historical_matches == 12
+    assert hyperparams.phase_b.iteration_loop.similarity_fallback_threshold == 0.62
 
 
 def test_load_hyperparameters_ignores_comment_fields(tmp_path: Path) -> None:
@@ -33,9 +35,12 @@ def test_load_hyperparameters_ignores_comment_fields(tmp_path: Path) -> None:
             "iteration_loop": {
                 "top_k_historical_matches": 9,
                 "similarity_threshold": 0.8,
+                "similarity_fallback_threshold": 0.58,
                 "edge_acceptance_confidence_threshold": 0.7,
+                "retrieval_overfetch_multiplier": 5,
                 "max_section_chars_per_call": 25000,
                 "max_state_nodes_in_context": 150,
+                "max_historical_nodes_for_local_similarity": 300,
             },
         },
     }
@@ -47,3 +52,5 @@ def test_load_hyperparameters_ignores_comment_fields(tmp_path: Path) -> None:
     assert hyperparams.phase_a.include_transcript_chunks is False
     assert hyperparams.phase_b.toc_generation.max_input_chars == 90000
     assert hyperparams.phase_b.iteration_loop.top_k_historical_matches == 9
+    assert hyperparams.phase_b.iteration_loop.similarity_fallback_threshold == 0.58
+    assert hyperparams.phase_b.iteration_loop.retrieval_overfetch_multiplier == 5
