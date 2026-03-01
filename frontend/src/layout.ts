@@ -74,33 +74,72 @@ function buildTopologicalLevels(nodes: FlowNode[], edges: FlowEdge[]): Topologic
 
 function applyTopologicalLayout(nodes: FlowNode[], edges: FlowEdge[]): FlowNode[] {
   const levels = buildTopologicalLevels(nodes, edges)
-  const groups = new Map<number, FlowNode[]>()
+  const groups = new Map<string, FlowNode[]>()
   for (const node of nodes) {
-    const layer = levels.get(node.id) ?? 0
-    const bucket = groups.get(layer) ?? []
+    const groupKey = node.data.sectionId?.split('/')[0] || 'ungrouped'
+    const bucket = groups.get(groupKey) ?? []
     bucket.push(node)
-    groups.set(layer, bucket)
+    groups.set(groupKey, bucket)
   }
 
-  const sortedLayers = Array.from(groups.keys()).sort((left, right) => left - right)
-  const horizontalGap = 280
-  const verticalGap = 120
+  const sortedGroups = Array.from(groups.entries()).sort((left, right) => {
+    const leftLevels = left[1].map((node) => levels.get(node.id) ?? 0)
+    const rightLevels = right[1].map((node) => levels.get(node.id) ?? 0)
+    const leftAvg = leftLevels.reduce((sum, value) => sum + value, 0) / leftLevels.length
+    const rightAvg = rightLevels.reduce((sum, value) => sum + value, 0) / rightLevels.length
+    if (leftAvg !== rightAvg) {
+      return leftAvg - rightAvg
+    }
+    return left[0].localeCompare(right[0])
+  })
+  const groupGap = 480
+  const arcRadiusBase = 90
   const laidOut = new Map<string, FlowNode>()
 
-  for (const layer of sortedLayers) {
-    const bucket = groups.get(layer) ?? []
-    bucket.sort((left, right) => left.data.label.localeCompare(right.data.label))
-    const totalHeight = (bucket.length - 1) * verticalGap
-    bucket.forEach((node, index) => {
+  sortedGroups.forEach(([groupKey, bucket], groupIndex) => {
+    const centerX = groupIndex * groupGap
+    const centerY = 0
+    const sortedBucket = [...bucket].sort((left, right) => {
+      const leftLevel = levels.get(left.id) ?? 0
+      const rightLevel = levels.get(right.id) ?? 0
+      if (leftLevel !== rightLevel) {
+        return leftLevel - rightLevel
+      }
+      return left.data.label.localeCompare(right.data.label)
+    })
+
+    if (sortedBucket.length === 1) {
+      const only = sortedBucket[0]
+      laidOut.set(only.id, {
+        ...only,
+        position: {
+          x: centerX,
+          y: centerY,
+        },
+      })
+      return
+    }
+
+    const radius = arcRadiusBase + sortedBucket.length * 12
+    const startAngle = Math.PI
+    const endAngle = 0
+    const spread = startAngle - endAngle
+    sortedBucket.forEach((node, index) => {
+      const ratio = sortedBucket.length === 1 ? 0.5 : index / (sortedBucket.length - 1)
+      const angle = startAngle - spread * ratio
+      const levelBiasX = (levels.get(node.id) ?? 0) * 28
       laidOut.set(node.id, {
         ...node,
         position: {
-          x: layer * horizontalGap,
-          y: index * verticalGap - totalHeight / 2,
+          x: centerX + Math.cos(angle) * radius * 0.18 + levelBiasX,
+          y: centerY + Math.sin(angle) * radius * 1.05 - radius * 0.55,
         },
       })
     })
-  }
+
+    // Keep group key referenced to avoid dead-code elimination warnings in some configs.
+    void groupKey
+  })
 
   return nodes.map((node) => laidOut.get(node.id) ?? node)
 }

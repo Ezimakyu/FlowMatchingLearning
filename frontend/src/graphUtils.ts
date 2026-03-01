@@ -96,6 +96,8 @@ export function graphToFlowElements(graph: GraphData): {
       label: node.label,
       summary: node.summary,
       confidence: node.confidence ?? 1,
+      sectionId: node.source_material.section_id || 'ungrouped',
+      docId: node.source_material.doc_id || 'unknown_doc',
     },
   }))
   const initialEdges: FlowEdge[] = graph.edges.map((edge) => ({

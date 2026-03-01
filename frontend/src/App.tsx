@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ChangeEvent,
+} from 'react'
 import ReactFlow, {
   Background,
   Controls,
@@ -23,6 +30,139 @@ import type {
 } from './types'
 
 const DEFAULT_GRAPH_PATH = '/graph_data.json'
+const SUPPORTED_SOURCE_EXTENSIONS = new Set(['.pdf', '.ppt', '.pptx'])
+const SUPPORTED_MEDIA_EXTENSIONS = new Set([
+  '.mp4',
+  '.mp3',
+  '.wav',
+  '.m4a',
+  '.mov',
+  '.webm',
+  '.mkv',
+])
+
+type ModelProfile = 'test' | 'demo'
+
+interface BatchJobRow {
+  jobId: string
+  docId: string
+  sourceFile: string
+  status: string
+  stage: string
+  error?: string
+}
+
+function extensionOf(filename: string): string {
+  const index = filename.lastIndexOf('.')
+  if (index < 0) {
+    return ''
+  }
+  return filename.slice(index).toLowerCase()
+}
+
+function stemOf(filename: string): string {
+  const index = filename.lastIndexOf('.')
+  if (index < 0) {
+    return filename
+  }
+  return filename.slice(0, index)
+}
+
+function normalizePath(value: string): string {
+  return value.replaceAll('\\', '/').trim().toLowerCase()
+}
+
+function relativePathOf(file: File): string {
+  return file.webkitRelativePath || file.name
+}
+
+function inferDirectoryDocId(files: File[]): string {
+  if (files.length === 0) {
+    return 'doc_directory_batch'
+  }
+  const firstPath = relativePathOf(files[0])
+  const firstSegment = firstPath.split('/')[0]
+  return `doc_${slugify(firstSegment)}`
+}
+
+function slugify(value: string): string {
+  const cleaned = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+  return cleaned || 'item'
+}
+
+function dedupeWithCounter(base: string, seen: Map<string, number>): string {
+  const previous = seen.get(base) ?? 0
+  seen.set(base, previous + 1)
+  if (previous === 0) {
+    return base
+  }
+  return `${base}_${previous + 1}`
+}
+
+function manifestSetFromPayload(payload: unknown): Set<string> {
+  const entries = new Set<string>()
+  const pushEntry = (value: unknown) => {
+    if (typeof value !== 'string') {
+      return
+    }
+    const normalized = normalizePath(value)
+    if (!normalized) {
+      return
+    }
+    entries.add(normalized)
+    const segments = normalized.split('/')
+    entries.add(segments[segments.length - 1])
+  }
+
+  if (Array.isArray(payload)) {
+    for (const item of payload) {
+      pushEntry(item)
+    }
+    return entries
+  }
+
+  if (!payload || typeof payload !== 'object') {
+    return entries
+  }
+  const candidate = payload as Record<string, unknown>
+  if (Array.isArray(candidate.files)) {
+    for (const file of candidate.files) {
+      pushEntry(file)
+    }
+  }
+  if (Array.isArray(candidate.items)) {
+    for (const item of candidate.items) {
+      if (item && typeof item === 'object') {
+        const sourceFile = (item as Record<string, unknown>).source_file
+        pushEntry(sourceFile)
+      }
+    }
+  }
+  return entries
+}
+
+function keyPartsForFile(file: File): { parent: string; stem: string; relative: string } {
+  const relative = normalizePath(relativePathOf(file))
+  const segments = relative.split('/')
+  const filename = segments.pop() || relative
+  const parent = segments.join('/')
+  return { parent, stem: stemOf(filename), relative }
+}
+
+async function parseErrorMessage(response: Response): Promise<string> {
+  try {
+    const payload = await response.json()
+    if (payload && typeof payload.detail === 'string') {
+      return payload.detail
+    }
+  } catch {
+    // fall back to status text below
+  }
+  return `Request failed with status ${response.status}.`
+}
 
 function App() {
   const [graphData, setGraphData] = useState<GraphData | null>(null)
@@ -30,11 +170,25 @@ function App() {
   const [allEdges, setAllEdges] = useState<FlowEdge[]>([])
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('topological')
   const [searchTerm, setSearchTerm] = useState('')
-  const [jobIdInput, setJobIdInput] = useState('')
   const [isLoading, setIsLoading] = useState(false)
+  const [isBatchRunning, setIsBatchRunning] = useState(false)
   const [statusText, setStatusText] = useState('Waiting to load graph_data.json...')
   const [errorText, setErrorText] = useState<string | null>(null)
   const [selected, setSelected] = useState<SelectedDetails>(null)
+  const [batchModelProfile, setBatchModelProfile] = useState<ModelProfile>('test')
+  const [directoryFiles, setDirectoryFiles] = useState<File[]>([])
+  const [manifestSummary, setManifestSummary] = useState('No manifest filter loaded.')
+  const [manifestFilter, setManifestFilter] = useState<Set<string> | null>(null)
+  const [batchJobs, setBatchJobs] = useState<BatchJobRow[]>([])
+  const directoryInputRef = useRef<HTMLInputElement | null>(null)
+  const manifestInputRef = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => {
+    if (directoryInputRef.current) {
+      directoryInputRef.current.setAttribute('webkitdirectory', '')
+      directoryInputRef.current.setAttribute('directory', '')
+    }
+  }, [])
 
   const nodeById = useMemo(() => {
     const map = new Map<string, ConceptNodeRecord>()
@@ -100,14 +254,232 @@ function App() {
     void loadGraphFromPath(DEFAULT_GRAPH_PATH)
   }, [loadGraphFromPath])
 
-  const loadGraphFromJob = useCallback(() => {
-    const jobId = jobIdInput.trim()
-    if (!jobId) {
-      setErrorText('Enter a job id before loading from API.')
+  const loadGraphForBatchJob = useCallback(
+    (jobId: string) => {
+      void loadGraphFromPath(`/api/v1/jobs/${encodeURIComponent(jobId)}/graph`)
+    },
+    [loadGraphFromPath]
+  )
+
+  const onDirectorySelected = useCallback(
+    (event: ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(event.target.files ?? [])
+      setDirectoryFiles(files)
+      const sourceCount = files.filter((file) =>
+        SUPPORTED_SOURCE_EXTENSIONS.has(extensionOf(file.name))
+      ).length
+      setStatusText(
+        `Selected ${files.length} files from directory (${sourceCount} supported source files).`
+      )
+    },
+    []
+  )
+
+  const onManifestSelected = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    if (!file) {
+      setManifestFilter(null)
+      setManifestSummary('No manifest filter loaded.')
       return
     }
-    void loadGraphFromPath(`/api/v1/jobs/${encodeURIComponent(jobId)}/graph`)
-  }, [jobIdInput, loadGraphFromPath])
+    try {
+      const text = await file.text()
+      const payload = JSON.parse(text)
+      const filterSet = manifestSetFromPayload(payload)
+      if (filterSet.size === 0) {
+        throw new Error('Manifest did not contain any usable file names.')
+      }
+      setManifestFilter(filterSet)
+      setManifestSummary(`Manifest loaded: ${filterSet.size} file entries.`)
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Could not parse manifest file.'
+      setErrorText(message)
+      setManifestFilter(null)
+      setManifestSummary('Invalid manifest file.')
+    }
+  }, [])
+
+  const runDirectoryBatch = useCallback(async () => {
+    const sourceFiles = directoryFiles.filter((file) =>
+      SUPPORTED_SOURCE_EXTENSIONS.has(extensionOf(file.name))
+    )
+    if (sourceFiles.length === 0) {
+      setErrorText(
+        `No supported source files selected. Supported: ${Array.from(SUPPORTED_SOURCE_EXTENSIONS).join(', ')}`
+      )
+      return
+    }
+
+    let selectedSourceFiles = sourceFiles
+    if (manifestFilter && manifestFilter.size > 0) {
+      selectedSourceFiles = sourceFiles.filter((file) => {
+        const normalizedRelative = normalizePath(relativePathOf(file))
+        const normalizedBase = normalizePath(file.name)
+        return manifestFilter.has(normalizedRelative) || manifestFilter.has(normalizedBase)
+      })
+      if (selectedSourceFiles.length === 0) {
+        setErrorText('Manifest filter removed all source files from the selected directory.')
+        return
+      }
+    }
+
+    const mediaByFullKey = new Map<string, File[]>()
+    const mediaByStem = new Map<string, File[]>()
+    for (const file of directoryFiles) {
+      if (!SUPPORTED_MEDIA_EXTENSIONS.has(extensionOf(file.name))) {
+        continue
+      }
+      const parts = keyPartsForFile(file)
+      const fullKey = `${parts.parent}::${parts.stem}`
+      const exactBucket = mediaByFullKey.get(fullKey) ?? []
+      exactBucket.push(file)
+      mediaByFullKey.set(fullKey, exactBucket)
+
+      const stemBucket = mediaByStem.get(parts.stem) ?? []
+      stemBucket.push(file)
+      mediaByStem.set(parts.stem, stemBucket)
+    }
+
+    const sourceIdSeen = new Map<string, number>()
+    const uploadIds: string[] = []
+    const resolvedDocId = inferDirectoryDocId(selectedSourceFiles)
+    setIsBatchRunning(true)
+    setErrorText(null)
+    setBatchJobs([])
+    try {
+      for (const [index, sourceFile] of selectedSourceFiles.entries()) {
+        const sourceParts = keyPartsForFile(sourceFile)
+        const sourceFileId = dedupeWithCounter(
+          `src_${slugify(sourceParts.stem)}`,
+          sourceIdSeen
+        )
+
+        const fullKey = `${sourceParts.parent}::${sourceParts.stem}`
+        const exactMedia = mediaByFullKey.get(fullKey) ?? []
+        const fallbackMedia = mediaByStem.get(sourceParts.stem) ?? []
+        const matchedMedia =
+          exactMedia.length > 0
+            ? exactMedia.shift()
+            : fallbackMedia.length > 0
+              ? fallbackMedia.shift()
+              : undefined
+        if (matchedMedia) {
+          const remainingExact = (mediaByFullKey.get(fullKey) ?? []).filter(
+            (item) => item !== matchedMedia
+          )
+          if (remainingExact.length > 0) {
+            mediaByFullKey.set(fullKey, remainingExact)
+          } else {
+            mediaByFullKey.delete(fullKey)
+          }
+          const remainingFallback = (mediaByStem.get(sourceParts.stem) ?? []).filter(
+            (item) => item !== matchedMedia
+          )
+          if (remainingFallback.length > 0) {
+            mediaByStem.set(sourceParts.stem, remainingFallback)
+          } else {
+            mediaByStem.delete(sourceParts.stem)
+          }
+        }
+
+        setStatusText(
+          `Uploading ${index + 1}/${selectedSourceFiles.length}: ${relativePathOf(sourceFile)}`
+        )
+        const uploadBody = new FormData()
+        uploadBody.append('doc_id', resolvedDocId)
+        uploadBody.append('source_file_id', sourceFileId)
+        uploadBody.append('source_file', sourceFile)
+        if (matchedMedia) {
+          uploadBody.append('media_file', matchedMedia)
+          uploadBody.append('media_id', `media_${sourceFileId}`)
+        }
+
+        const uploadResponse = await fetch('/api/v1/upload', {
+          method: 'POST',
+          body: uploadBody,
+        })
+        if (!uploadResponse.ok) {
+          throw new Error(await parseErrorMessage(uploadResponse))
+        }
+        const uploadPayload = (await uploadResponse.json()) as { upload_id: string }
+        uploadIds.push(uploadPayload.upload_id)
+      }
+      setStatusText(`Starting combined job for ${selectedSourceFiles.length} files...`)
+      const startResponse = await fetch('/api/v1/jobs/start-combined', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          upload_ids: uploadIds,
+          doc_id: resolvedDocId,
+          model_profile: batchModelProfile,
+          force_restart: true,
+        }),
+      })
+      if (!startResponse.ok) {
+        throw new Error(await parseErrorMessage(startResponse))
+      }
+      const startPayload = (await startResponse.json()) as {
+        job: { job_id: string; status: string; stage: string; doc_id: string }
+      }
+      const job = startPayload.job
+      setBatchJobs([
+        {
+          jobId: job.job_id,
+          docId: job.doc_id,
+          sourceFile: `${selectedSourceFiles.length} files`,
+          status: job.status,
+          stage: job.stage,
+        },
+      ])
+      setStatusText(`Started combined job ${job.job_id} for ${selectedSourceFiles.length} files.`)
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to start directory batch.'
+      setErrorText(message)
+      setStatusText('Directory batch failed.')
+    } finally {
+      setIsBatchRunning(false)
+    }
+  }, [batchModelProfile, directoryFiles, manifestFilter])
+
+  const refreshBatchStatuses = useCallback(async () => {
+    if (batchJobs.length === 0) {
+      return
+    }
+    setIsLoading(true)
+    setErrorText(null)
+    try {
+      const updated = await Promise.all(
+        batchJobs.map(async (job) => {
+          const response = await fetch(`/api/v1/jobs/${encodeURIComponent(job.jobId)}`)
+          if (!response.ok) {
+            return {
+              ...job,
+              error: await parseErrorMessage(response),
+            }
+          }
+          const payload = (await response.json()) as {
+            job: { status: string; stage: string; doc_id: string; error?: string | null }
+          }
+          return {
+            ...job,
+            docId: payload.job.doc_id,
+            status: payload.job.status,
+            stage: payload.job.stage,
+            error: payload.job.error || undefined,
+          }
+        })
+      )
+      setBatchJobs(updated)
+      setStatusText(`Refreshed ${updated.length} job statuses.`)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not refresh job status.'
+      setErrorText(message)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [batchJobs])
 
   useEffect(() => {
     reloadLocalGraph()
@@ -196,46 +568,95 @@ function App() {
     <div className="app-shell">
       <header className="toolbar">
         <div className="toolbar-title">
-          <h1>Prerequisite Graph Viewer</h1>
+          <h1>FlowMatchingLearning</h1>
           <p>React Flow visualization for `graph_data.json`.</p>
         </div>
         <div className="toolbar-controls">
-          <button type="button" onClick={reloadLocalGraph} disabled={isLoading}>
-            Reload local graph_data.json
-          </button>
-          <div className="job-loader">
+          <div className="toolbar-group toolbar-group-left">
+            <button
+              type="button"
+              onClick={() => directoryInputRef.current?.click()}
+              disabled={isBatchRunning}
+            >
+              Select directory
+            </button>
             <input
-              type="text"
-              value={jobIdInput}
-              onChange={(event) => setJobIdInput(event.target.value)}
-              placeholder="Job ID (optional API load)"
+              ref={directoryInputRef}
+              type="file"
+              multiple
+              onChange={onDirectorySelected}
+              className="visually-hidden"
             />
-            <button type="button" onClick={loadGraphFromJob} disabled={isLoading}>
-              Load from API
+            <button
+              type="button"
+              onClick={() => manifestInputRef.current?.click()}
+              disabled={isBatchRunning}
+            >
+              Load file-list JSON (optional)
+            </button>
+            <input
+              ref={manifestInputRef}
+              type="file"
+              accept=".json,application/json"
+              onChange={onManifestSelected}
+              className="visually-hidden"
+            />
+            <button
+              type="button"
+              className="primary-button"
+              onClick={runDirectoryBatch}
+              disabled={isBatchRunning || directoryFiles.length === 0}
+            >
+              Run single combined job
             </button>
           </div>
-          <label>
-            Layout
-            <select
-              value={layoutMode}
-              onChange={(event) => setLayoutMode(event.target.value as LayoutMode)}
+          <div className="toolbar-group toolbar-group-right">
+            <button type="button" onClick={reloadLocalGraph} disabled={isLoading}>
+              Reload local graph_data.json
+            </button>
+            <button
+              type="button"
+              onClick={refreshBatchStatuses}
+              disabled={isBatchRunning || batchJobs.length === 0}
             >
-              <option value="topological">Topological</option>
-              <option value="force">Force</option>
-            </select>
-          </label>
-          <label>
-            Search / Filter
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(event) => setSearchTerm(event.target.value)}
-              placeholder="Find concepts"
-            />
-          </label>
+              Refresh job statuses
+            </button>
+            <label>
+              Batch model
+              <select
+                value={batchModelProfile}
+                onChange={(event) => setBatchModelProfile(event.target.value as ModelProfile)}
+              >
+                <option value="test">test</option>
+                <option value="demo">demo</option>
+              </select>
+            </label>
+            <label>
+              Layout
+              <select
+                value={layoutMode}
+                onChange={(event) => setLayoutMode(event.target.value as LayoutMode)}
+              >
+                <option value="topological">Topological</option>
+                <option value="force">Force</option>
+              </select>
+            </label>
+            <label>
+              Search / Filter
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+                placeholder="Find concepts"
+              />
+            </label>
+          </div>
         </div>
         <div className="toolbar-status">
           <span>{statusText}</span>
+          <span>
+            Directory selection: {directoryFiles.length} files ({manifestSummary})
+          </span>
           <span>
             Showing {visibleNodes.length}/{allNodes.length} nodes, {visibleEdges.length}/
             {allEdges.length} edges
@@ -243,6 +664,31 @@ function App() {
           {errorText ? <span className="error-text">{errorText}</span> : null}
         </div>
       </header>
+      {batchJobs.length > 0 ? (
+        <section className="batch-jobs">
+          <h2>Batch Jobs</h2>
+          <div className="batch-jobs-list">
+            {batchJobs.map((job) => (
+              <div key={job.jobId} className="batch-job-row">
+                <div className="batch-job-main">
+                  <span className="batch-job-source">{job.sourceFile}</span>
+                  <span className="batch-job-id">{job.jobId}</span>
+                </div>
+                <div className="batch-job-status">
+                  <span className={`status-chip status-${job.status.toLowerCase()}`}>
+                    {job.status}
+                  </span>
+                  <span className="stage-chip">{job.stage}</span>
+                  <button type="button" onClick={() => loadGraphForBatchJob(job.jobId)}>
+                    Load graph
+                  </button>
+                </div>
+                {job.error ? <div className="batch-job-error">{job.error}</div> : null}
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
       <main className="content">
         <div className="flow-wrapper">
           <ReactFlow

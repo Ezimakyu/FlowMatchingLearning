@@ -4,12 +4,16 @@
   min-height: 100vh;
   background: #f6f8fb;
   color: #1f2937;
+  padding-bottom: 8.5rem;
 }
 
 .toolbar {
   border-bottom: 1px solid #d7dde8;
   background: #ffffff;
   padding: 0.9rem 1rem;
+  position: sticky;
+  top: 0;
+  z-index: 20;
 }
 
 .toolbar-title h1 {
@@ -26,9 +30,23 @@
 .toolbar-controls {
   margin-top: 0.85rem;
   display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.toolbar-group {
+  display: flex;
   flex-wrap: wrap;
   gap: 0.55rem;
   align-items: center;
+}
+
+.toolbar-group-left {
+  justify-content: flex-start;
+}
+
+.toolbar-group-right {
+  justify-content: flex-end;
 }
 
 .toolbar-controls button,
@@ -46,20 +64,23 @@
   cursor: pointer;
 }
 
+.toolbar-controls .primary-button {
+  background: #175cd3;
+  border-color: #175cd3;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.toolbar-controls button:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
 .toolbar-controls label {
   display: flex;
   align-items: center;
   gap: 0.45rem;
   font-size: 0.9rem;
-}
-
-.job-loader {
-  display: flex;
-  gap: 0.45rem;
-}
-
-.job-loader input {
-  min-width: 16rem;
 }
 
 .toolbar-status {
@@ -76,12 +97,131 @@
   font-weight: 600;
 }
 
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  clip: rect(0 0 0 0);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.batch-jobs {
+  border-bottom: 1px solid #d7dde8;
+  background: #f8fafc;
+  padding: 0.7rem 1rem;
+  width: min(1620px, calc(100% - 2.5rem));
+  margin: 0.75rem auto 0;
+  border: 1px solid #d7dde8;
+  border-radius: 10px;
+}
+
+.batch-jobs h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.batch-jobs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  max-height: 210px;
+  overflow-y: auto;
+}
+
+.batch-job-row {
+  background: #ffffff;
+  border: 1px solid #dde3ec;
+  border-radius: 8px;
+  padding: 0.52rem 0.65rem;
+}
+
+.batch-job-main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: baseline;
+}
+
+.batch-job-source {
+  font-size: 0.88rem;
+  color: #2e3a4c;
+}
+
+.batch-job-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.75rem;
+  color: #6a7a90;
+}
+
+.batch-job-status {
+  margin-top: 0.35rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.status-chip,
+.stage-chip {
+  border-radius: 999px;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.74rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+
+.status-running {
+  background: #eff8ff;
+  color: #175cd3;
+  border-color: #b2ddff;
+}
+
+.status-completed {
+  background: #ecfdf3;
+  color: #067647;
+  border-color: #abefc6;
+}
+
+.status-failed {
+  background: #fef3f2;
+  color: #b42318;
+  border-color: #fecdca;
+}
+
+.status-pending {
+  background: #f9f5ff;
+  color: #6941c6;
+  border-color: #d9d6fe;
+}
+
+.stage-chip {
+  background: #f2f4f7;
+  color: #344054;
+  border-color: #d0d5dd;
+}
+
+.batch-job-error {
+  margin-top: 0.35rem;
+  color: #b42318;
+  font-size: 0.8rem;
+}
+
 .content {
   display: grid;
   grid-template-columns: 1fr 340px;
   gap: 0;
   flex: 1;
   min-height: 0;
+  width: min(1620px, calc(100% - 2.5rem));
+  margin: 1rem auto 0;
+  border: 1px solid #d7dde8;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #ffffff;
 }
 
 .flow-wrapper {
@@ -134,6 +274,10 @@
 }
 
 @media (max-width: 1080px) {
+  .toolbar-group-right {
+    justify-content: flex-start;
+  }
+
   .content {
     grid-template-columns: 1fr;
     grid-template-rows: minmax(55vh, 1fr) auto;

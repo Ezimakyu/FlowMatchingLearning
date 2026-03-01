@@ -53,6 +53,8 @@ export interface FlowNodeData {
   label: string
   summary: string
   confidence: number
+  sectionId: string
+  docId: string
 }
 
 export interface FlowEdgeData {
