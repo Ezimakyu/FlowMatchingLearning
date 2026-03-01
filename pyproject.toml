@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flow-matching-learning"
+version = "0.1.0"
+description = "Automated course topology and dependency graph generator."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "pydantic>=2.8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.0",
+  "pytest-cov>=5.0.0",
+]
+phase_a = [
+  "modal>=1.0.0",
+  "faster-whisper>=1.1.1",
+  "pymupdf>=1.26.0",
+  "pillow>=11.0.0",
+  "transformers>=4.56.0",
+  "torch>=2.8.0",
+  "sentence-transformers>=5.1.0",
+]
+phase_b = [
+  "openai>=1.55.0",
+]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"

@@ -1,0 +1,95 @@
+{
+  "$defs": {
+    "ChunkEmbedding": {
+      "additionalProperties": false,
+      "properties": {
+        "chunk_id": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._:-]+$",
+          "title": "Chunk Id",
+          "type": "string"
+        },
+        "model_name": {
+          "minLength": 1,
+          "title": "Model Name",
+          "type": "string"
+        },
+        "vector": {
+          "items": {
+            "type": "number"
+          },
+          "minItems": 1,
+          "title": "Vector",
+          "type": "array"
+        },
+        "vector_dim": {
+          "minimum": 1,
+          "title": "Vector Dim",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "chunk_id",
+        "vector",
+        "vector_dim",
+        "model_name"
+      ],
+      "title": "ChunkEmbedding",
+      "type": "object"
+    }
+  },
+  "$id": "embedding_batch_result.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "doc_id": {
+      "minLength": 1,
+      "title": "Doc Id",
+      "type": "string"
+    },
+    "embeddings": {
+      "items": {
+        "$ref": "#/$defs/ChunkEmbedding"
+      },
+      "title": "Embeddings",
+      "type": "array"
+    },
+    "metadata": {
+      "title": "Metadata",
+      "type": "object"
+    },
+    "model_name": {
+      "minLength": 1,
+      "title": "Model Name",
+      "type": "string"
+    },
+    "provider": {
+      "const": "modal",
+      "default": "modal",
+      "title": "Provider",
+      "type": "string"
+    },
+    "runtime": {
+      "const": "serverless_gpu",
+      "default": "serverless_gpu",
+      "title": "Runtime",
+      "type": "string"
+    },
+    "schema_version": {
+      "default": "1.0.0",
+      "title": "Schema Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "doc_id",
+    "model_name"
+  ],
+  "title": "EmbeddingBatchResult",
+  "type": "object"
+}

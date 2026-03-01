@@ -1,0 +1,98 @@
+{
+  "$defs": {
+    "VisionPageExtraction": {
+      "additionalProperties": false,
+      "properties": {
+        "chunk_ids": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Chunk Ids",
+          "type": "array"
+        },
+        "image_descriptions": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Image Descriptions",
+          "type": "array"
+        },
+        "page_number": {
+          "minimum": 1,
+          "title": "Page Number",
+          "type": "integer"
+        },
+        "raw_text": {
+          "default": "",
+          "title": "Raw Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "page_number"
+      ],
+      "title": "VisionPageExtraction",
+      "type": "object"
+    }
+  },
+  "$id": "vision_extraction_result.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "doc_id": {
+      "minLength": 1,
+      "title": "Doc Id",
+      "type": "string"
+    },
+    "metadata": {
+      "title": "Metadata",
+      "type": "object"
+    },
+    "model_name": {
+      "minLength": 1,
+      "title": "Model Name",
+      "type": "string"
+    },
+    "pages": {
+      "items": {
+        "$ref": "#/$defs/VisionPageExtraction"
+      },
+      "title": "Pages",
+      "type": "array"
+    },
+    "provider": {
+      "const": "modal",
+      "default": "modal",
+      "title": "Provider",
+      "type": "string"
+    },
+    "runtime": {
+      "const": "serverless_gpu",
+      "default": "serverless_gpu",
+      "title": "Runtime",
+      "type": "string"
+    },
+    "schema_version": {
+      "default": "1.0.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "source_file_id": {
+      "minLength": 1,
+      "title": "Source File Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "doc_id",
+    "source_file_id",
+    "model_name"
+  ],
+  "title": "VisionExtractionResult",
+  "type": "object"
+}

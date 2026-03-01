@@ -1,0 +1,286 @@
+{
+  "$defs": {
+    "ChunkEmbedding": {
+      "additionalProperties": false,
+      "properties": {
+        "chunk_id": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._:-]+$",
+          "title": "Chunk Id",
+          "type": "string"
+        },
+        "model_name": {
+          "minLength": 1,
+          "title": "Model Name",
+          "type": "string"
+        },
+        "vector": {
+          "items": {
+            "type": "number"
+          },
+          "minItems": 1,
+          "title": "Vector",
+          "type": "array"
+        },
+        "vector_dim": {
+          "minimum": 1,
+          "title": "Vector Dim",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "chunk_id",
+        "vector",
+        "vector_dim",
+        "model_name"
+      ],
+      "title": "ChunkEmbedding",
+      "type": "object"
+    },
+    "ChunkingResult": {
+      "additionalProperties": false,
+      "properties": {
+        "chunks": {
+          "items": {
+            "$ref": "#/$defs/RawTextChunk"
+          },
+          "title": "Chunks",
+          "type": "array"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "doc_id": {
+          "minLength": 1,
+          "title": "Doc Id",
+          "type": "string"
+        },
+        "metadata": {
+          "title": "Metadata",
+          "type": "object"
+        },
+        "schema_version": {
+          "default": "1.0.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "doc_id"
+      ],
+      "title": "ChunkingResult",
+      "type": "object"
+    },
+    "EmbeddingBatchResult": {
+      "additionalProperties": false,
+      "properties": {
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "doc_id": {
+          "minLength": 1,
+          "title": "Doc Id",
+          "type": "string"
+        },
+        "embeddings": {
+          "items": {
+            "$ref": "#/$defs/ChunkEmbedding"
+          },
+          "title": "Embeddings",
+          "type": "array"
+        },
+        "metadata": {
+          "title": "Metadata",
+          "type": "object"
+        },
+        "model_name": {
+          "minLength": 1,
+          "title": "Model Name",
+          "type": "string"
+        },
+        "provider": {
+          "const": "modal",
+          "default": "modal",
+          "title": "Provider",
+          "type": "string"
+        },
+        "runtime": {
+          "const": "serverless_gpu",
+          "default": "serverless_gpu",
+          "title": "Runtime",
+          "type": "string"
+        },
+        "schema_version": {
+          "default": "1.0.0",
+          "title": "Schema Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "doc_id",
+        "model_name"
+      ],
+      "title": "EmbeddingBatchResult",
+      "type": "object"
+    },
+    "RawTextChunk": {
+      "additionalProperties": false,
+      "properties": {
+        "chunk_id": {
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9._:-]+$",
+          "title": "Chunk Id",
+          "type": "string"
+        },
+        "doc_id": {
+          "minLength": 1,
+          "title": "Doc Id",
+          "type": "string"
+        },
+        "metadata": {
+          "title": "Metadata",
+          "type": "object"
+        },
+        "order": {
+          "minimum": 0,
+          "title": "Order",
+          "type": "integer"
+        },
+        "section_hint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Section Hint"
+        },
+        "source_page": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Page"
+        },
+        "source_time_end_seconds": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Time End Seconds"
+        },
+        "source_time_start_seconds": {
+          "anyOf": [
+            {
+              "minimum": 0.0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Time Start Seconds"
+        },
+        "source_type": {
+          "default": "manual",
+          "enum": [
+            "transcript",
+            "vision_text",
+            "vision_image_description",
+            "manual"
+          ],
+          "title": "Source Type",
+          "type": "string"
+        },
+        "text": {
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "token_estimate": {
+          "minimum": 1,
+          "title": "Token Estimate",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "chunk_id",
+        "doc_id",
+        "order",
+        "text",
+        "token_estimate"
+      ],
+      "title": "RawTextChunk",
+      "type": "object"
+    }
+  },
+  "$id": "phase_a_ingestion_result.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "chunking": {
+      "$ref": "#/$defs/ChunkingResult"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "doc_id": {
+      "minLength": 1,
+      "title": "Doc Id",
+      "type": "string"
+    },
+    "embeddings": {
+      "$ref": "#/$defs/EmbeddingBatchResult"
+    },
+    "metadata": {
+      "title": "Metadata",
+      "type": "object"
+    },
+    "schema_version": {
+      "default": "1.0.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "stored_chunk_count": {
+      "minimum": 0,
+      "title": "Stored Chunk Count",
+      "type": "integer"
+    },
+    "stored_embedding_count": {
+      "minimum": 0,
+      "title": "Stored Embedding Count",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "doc_id",
+    "chunking",
+    "embeddings",
+    "stored_chunk_count",
+    "stored_embedding_count"
+  ],
+  "title": "PhaseAIngestionResult",
+  "type": "object"
+}
